@@ -1,0 +1,4 @@
+-- This directory is not the migration source used by the application.
+-- The canonical Phase 1 schema is ../../migrations/001_initial_schema.sql
+-- and is executed by node-pg-migrate through migrations/001_initial_schema.js.
+-- Keep schema definitions in the root migrations directory only.

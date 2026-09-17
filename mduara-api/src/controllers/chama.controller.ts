@@ -1,0 +1,403 @@
+import type { Request, Response, NextFunction } from 'express';
+import { chamaService } from '../services/chama.service';
+import { chamaApplicationService } from '../services/chama-application.service';
+import { chamaInvitationService } from '../services/chama-invitation.service';
+import { publicChamaService } from '../services/public-chama.service';
+import { smsService } from '../services/sms.service';
+import { notificationService } from '../services/notification.service';
+import { env } from '../config/env';
+import type { CreateChamaParams } from '../shared/business_base';
+import { applicationIdSchema, constitutionAmendSchema, constitutionSetupSchema, createChamaSchema, inviteSchema, listApplicationsSchema, listInvitationsSchema, listMembersSchema, reviewApplicationSchema, updateChamaSchema, updateMemberSchema } from '../validation/chama.validation';
+import { publicChamaApplySchema, publicChamaListSchema } from '../validation/public-chama.validation';
+import { BadRequestError, UnauthorizedError } from '../utils/errors';
+
+
+async function notifyApplicationApproved(result: any): Promise<void> {
+  if (!result || result.outcome === 'rejected') return;
+  const userId = result.application?.user_id;
+  const chamaId = result.application?.chama_id;
+  const applicationId = result.application?.id;
+  if (!userId || !chamaId || !applicationId) return;
+  const chama = await chamaService.getChamaById(chamaId).catch(() => null);
+  await notificationService.dispatchBestEffort({
+    userIds: [userId],
+    chamaId,
+    template: 'application_approved',
+    data: {
+      chamaName: chama?.name ?? 'your Chama',
+      nextStep: result.outcome === 'commitment_required'
+        ? 'Pay the required commitment deposit to activate your membership.'
+        : 'Your membership is now active.',
+    },
+    dedupeKey: `application-approved:${applicationId}`,
+  });
+}
+
+export async function createChama(req: Request, res: Response, next: NextFunction) {
+	try {
+		if (!req.user?.id) throw new UnauthorizedError();
+		const payload = createChamaSchema.parse(req.body) as CreateChamaParams;
+		const created = await chamaService.createChama({ ...payload, created_by: req.user.id });
+		res.status(201).json({ data: created });
+	} catch (error) {
+		next(error);
+	}
+}
+
+
+export async function listConstitutionTemplates(_req: Request, res: Response, next: NextFunction) {
+  try {
+    res.json({ data: chamaService.listConstitutionTemplates() });
+  } catch (error) { next(error); }
+}
+
+export async function getChamaConstitution(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.id) throw new UnauthorizedError();
+    const data = await chamaService.getConstitution(req.params.id, req.user.id);
+    res.json({ data });
+  } catch (error) { next(error); }
+}
+
+export async function configureChamaRules(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.id) throw new UnauthorizedError();
+    const input = constitutionSetupSchema.parse(req.body);
+    const data = await chamaService.configureConstitution(req.params.id, req.user.id, input);
+    res.json({ data });
+  } catch (error) { next(error); }
+}
+
+export async function amendChamaRules(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.id) throw new UnauthorizedError();
+    const input = constitutionAmendSchema.parse(req.body);
+    const data = await chamaService.amendConstitution(req.params.id, req.user.id, input);
+    res.json({ data });
+  } catch (error) { next(error); }
+}
+
+export async function getChama(req: Request, res: Response, next: NextFunction) {
+	try {
+		const chama = await chamaService.getChamaById(req.params.id);
+		res.json({ data: chama });
+	} catch (error) {
+		next(error);
+	}
+}
+
+export async function updateChama(req: Request, res: Response, next: NextFunction) {
+	try {
+		const payload = updateChamaSchema.parse(req.body);
+		const updated = await chamaService.updateChama({ chamaId: req.params.id, updates: payload });
+		res.json({ data: updated });
+	} catch (error) {
+		next(error);
+	}
+}
+
+export async function inviteToChama(req: Request, res: Response, next: NextFunction) {
+	try {
+		const params = inviteSchema.parse(req.body);
+		const { id: chamaId } = req.params;
+
+		// Resolve the target user and their phone. Never fall back to the inviter's
+		// phone when the invite was addressed by user id.
+		const db = (await import('../db/client')).pool;
+		let applicantId = params.applicant_user_id;
+		let applicantPhone = params.phone;
+
+		if (applicantId) {
+			const r = await db.query(`SELECT id, phone FROM users WHERE id = $1`, [applicantId]);
+			const user = r.rows[0];
+			if (!user) throw new Error('No user found for provided applicant_user_id');
+			applicantPhone = user.phone;
+		} else if (params.phone) {
+			const r = await db.query(`SELECT id, phone FROM users WHERE phone = $1`, [params.phone]);
+			const user = r.rows[0];
+			if (user) applicantId = user.id;
+			applicantPhone = params.phone;
+		}
+
+		const { invitation, chama, inviteToken } = await chamaService.inviteApplicant({
+			chamaId,
+			applicantId,
+			requestedRole: params.requested_role,
+			message: params.message,
+			phone: applicantPhone,
+			expiresAt: params.expires_at,
+			maxUses: params.max_uses,
+			shareable: params.shareable,
+		});
+
+		const link = `${env.FRONTEND_URL ?? 'https://app.mduara.example.com'}/invite/${encodeURIComponent(inviteToken)}`;
+		let responseInvitation = {
+			id: invitation.id,
+			chamaId: invitation.chama_id,
+			applicantId: invitation.applicant_id,
+			recipientPhone: invitation.recipient_phone,
+			recipientEmail: invitation.recipient_email,
+			requestedRole: invitation.requested_role,
+			message: invitation.message,
+			status: invitation.status,
+			maxUses: invitation.max_uses,
+			useCount: invitation.use_count,
+			expiresAt: invitation.expires_at,
+			createdAt: invitation.created_at,
+		};
+		if (applicantPhone) {
+			try {
+				await smsService.sendMessage(
+					applicantPhone,
+					`You've been invited to join ${chama.name}. Use this link to accept: ${link}`,
+				);
+				responseInvitation = await chamaInvitationService.markSent(chamaId, invitation.id);
+			} catch (err) {
+				// Best-effort; keep the invitation pending so leadership can share/retry it manually.
+			}
+		}
+
+		res.status(201).json({
+			data: {
+				...responseInvitation,
+				inviteToken,
+				inviteUrl: link,
+			},
+		});
+	} catch (error) {
+		next(error);
+	}
+}
+
+export async function listChamaInvitations(req: Request, res: Response, next: NextFunction) {
+  try {
+    const query = listInvitationsSchema.parse(req.query);
+    const result = await chamaInvitationService.list({
+      chamaId: req.params.id,
+      page: query.page,
+      perPage: query.per_page,
+      status: query.status,
+    });
+    res.json({ data: result.invitations, meta: result.meta });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function cancelChamaInvitation(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.id) throw new UnauthorizedError();
+    const invitation = await chamaInvitationService.cancel(req.params.id, req.params.invitationId, req.user.id);
+    res.json({ data: invitation });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function resendChamaInvitation(req: Request, res: Response, next: NextFunction) {
+  try {
+    const target = await chamaInvitationService.getForResend(req.params.id, req.params.invitationId);
+    const link = `${env.FRONTEND_URL ?? 'https://app.mduara.example.com'}/invite/${target.invitation.id}`;
+    const chama = await chamaService.getChamaById(req.params.id);
+    await smsService.sendMessage(target.phone, `You've been invited to join ${chama.name}. Use this link to accept: ${link}`);
+    const invitation = await chamaInvitationService.markSent(req.params.id, req.params.invitationId);
+    res.json({ data: invitation });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function rejectChamaInvitation(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.id) throw new UnauthorizedError();
+    const invitation = await chamaInvitationService.reject(req.params.id, req.params.invitationId, req.user.id);
+    res.json({ data: invitation });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function listChamaApplications(req: Request, res: Response, next: NextFunction) {
+  try {
+    const query = listApplicationsSchema.parse(req.query);
+    const result = await chamaApplicationService.list({
+      chamaId: req.params.id,
+      page: query.page,
+      perPage: query.per_page,
+      status: query.status,
+    });
+    res.json({ data: result.applications, meta: result.meta });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function reviewChamaApplication(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.id) throw new UnauthorizedError();
+    const payload = reviewApplicationSchema.parse(req.body);
+    const result = await chamaApplicationService.review({
+      chamaId: req.params.id,
+      applicationId: req.params.applicationId,
+      actorId: req.user.id,
+      decision: payload.decision,
+      rejectionReason: payload.rejection_reason,
+    });
+    if (payload.decision === 'approve') await notifyApplicationApproved(result);
+    res.json({ data: result });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function approveChamaApplicationById(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.id) throw new UnauthorizedError();
+    const applicationId = applicationIdSchema.parse(req.params.applicationId);
+    const result = await chamaApplicationService.reviewByApplicationId({
+      applicationId,
+      actorId: req.user.id,
+      decision: 'approve',
+    });
+    await notifyApplicationApproved(result);
+    res.json({ data: result });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function rejectChamaApplicationById(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.id) throw new UnauthorizedError();
+    const applicationId = applicationIdSchema.parse(req.params.applicationId);
+    const payload = reviewApplicationSchema.parse({
+      decision: 'reject',
+      rejection_reason: req.body?.rejection_reason,
+    });
+    const result = await chamaApplicationService.reviewByApplicationId({
+      applicationId,
+      actorId: req.user.id,
+      decision: 'reject',
+      rejectionReason: payload.rejection_reason,
+    });
+    res.json({ data: result });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function listChamaMembers(req: Request, res: Response, next: NextFunction) {
+	try {
+		const query = listMembersSchema.parse({
+			page: req.query.page ? Number(req.query.page) : undefined,
+			per_page: req.query.per_page ? Number(req.query.per_page) : undefined,
+			role: req.query.role as string | undefined,
+			status: req.query.status as string | undefined,
+		});
+		const page = query.page ?? 1;
+		const perPage = query.per_page ?? 25;
+		const offset = (page - 1) * perPage;
+
+		const result = await chamaService.listMembers({ chamaId: req.params.id, limit: perPage, offset, role: query.role, status: query.status });
+		res.json({ data: result.members, meta: { total: result.total, page, per_page: perPage } });
+	} catch (error) {
+		next(error);
+	}
+}
+
+export async function updateChamaMember(req: Request, res: Response, next: NextFunction) {
+	try {
+		const payload = updateMemberSchema.parse(req.body);
+		const updated = await chamaService.updateMember({
+			chamaId: req.params.id,
+			userId: req.params.userId,
+			updates: payload,
+			actorId: req.user?.id,
+			actorIp: req.ip,
+			actorUserAgent: req.get('user-agent') ?? undefined,
+		});
+		res.json({ data: updated });
+	} catch (error) {
+		next(error);
+	}
+}
+
+export async function listPublicChamas(req: Request, res: Response, next: NextFunction) {
+  try {
+    const query = publicChamaListSchema.parse(req.query);
+    const result = await publicChamaService.list({
+      page: query.page,
+      perPage: query.per_page,
+      goalCode: query.goal_code,
+      status: query.status,
+      visibility: query.visibility,
+      type: query.type,
+      location: query.location,
+      minContribution: query.min_contribution,
+      maxContribution: query.max_contribution,
+      minDurationMonths: query.min_duration_months,
+      maxDurationMonths: query.max_duration_months,
+      hasCapacity: query.has_capacity,
+      minAvailableSpots: query.min_available_spots,
+    });
+    res.json({ data: result.chamas, meta: result.meta });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function getPublicChamaDetail(req: Request, res: Response, next: NextFunction) {
+  try {
+    const detail = await publicChamaService.getPublicDetail(req.params.id);
+    res.json({ data: detail });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export async function applyToChama(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.id) throw new UnauthorizedError();
+    const payload = publicChamaApplySchema.parse(req.body);
+    if (!payload.accept_constitution) {
+      throw new BadRequestError('Constitution must be accepted before joining', undefined, 'CONSTITUTION_NOT_ACCEPTED');
+    }
+    const result = await publicChamaService.apply({
+      userId: req.user.id,
+      chamaId: req.params.id,
+      constitutionRuleId: payload.constitution_rule_id,
+      message: payload.message,
+      invitationId: payload.invitation_id,
+      invitationToken: payload.invitation_token,
+      acceptanceIp: req.ip,
+      acceptanceUserAgent: req.get('user-agent') ?? null,
+    });
+    res.status(result.outcome === 'application_pending' ? 202 : 201).json({ data: result });
+  } catch (error) {
+    next(error);
+  }
+}
+
+export default {
+  createChama,
+  listConstitutionTemplates,
+  getChamaConstitution,
+  configureChamaRules,
+  amendChamaRules,
+  getChama,
+  updateChama,
+  inviteToChama,
+  listChamaInvitations,
+  cancelChamaInvitation,
+  resendChamaInvitation,
+  rejectChamaInvitation,
+  listChamaApplications,
+  reviewChamaApplication,
+  approveChamaApplicationById,
+  rejectChamaApplicationById,
+  listChamaMembers,
+  updateChamaMember,
+  listPublicChamas,
+  getPublicChamaDetail,
+  applyToChama,
+};
