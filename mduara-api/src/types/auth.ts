@@ -30,6 +30,7 @@ export interface ActiveChamaMembership {
  */
 export interface ApiRequest {
   headers: Record<string, string | string[] | undefined>;
+  method?: string;
   params?: Record<string, string | undefined>;
   originalUrl?: string;
   url?: string;

@@ -1,3 +1,4 @@
+import { createHash } from 'node:crypto';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { pool } from '../db/client';
 import { ForbiddenError, NotFoundError, ServiceUnavailableError } from '../utils/errors';
@@ -38,6 +39,14 @@ interface ChamaRow extends QueryResultRow {
   id: string;
   name: string;
   visibility: string;
+}
+
+interface MemberScoreInputs extends QueryResultRow {
+  due_count: string;
+  on_time_count: string;
+  missed_count: string;
+  membership_status: string;
+  latest_payment_at: string | null;
 }
 
 export interface RecordTrustSnapshotInput {
@@ -216,6 +225,60 @@ export class TrustScoreService {
     } finally {
       client.release();
     }
+  }
+
+  async refreshMembershipScore(client: PoolClient, membershipId: string): Promise<void> {
+    const formula = await this.getActiveFormulaForUpdate(client, 'member-v1', 'member');
+    if (!formula) return;
+
+    const inputs = (await client.query<MemberScoreInputs>(
+      `SELECT
+         COUNT(c.id) FILTER (WHERE c.due_date <= CURRENT_DATE)::text AS due_count,
+         COUNT(c.id) FILTER (WHERE c.due_date <= CURRENT_DATE AND c.status = 'paid' AND c.missed_at IS NULL)::text AS on_time_count,
+         COUNT(c.id) FILTER (WHERE c.due_date <= CURRENT_DATE AND c.missed_at IS NOT NULL)::text AS missed_count,
+         cm.membership_status::text AS membership_status,
+         MAX(cp.paid_at)::text AS latest_payment_at
+       FROM chama_members cm
+       LEFT JOIN contributions c ON c.member_id = cm.id AND c.chama_id = cm.chama_id
+       LEFT JOIN contribution_payments cp ON cp.contribution_id = c.id AND cp.status = 'confirmed'
+       WHERE cm.id = $1
+       GROUP BY cm.id, cm.membership_status`,
+      [membershipId],
+    )).rows[0];
+    if (!inputs) throw new NotFoundError('Membership not found');
+
+    const dueCount = Number(inputs.due_count);
+    const onTimeCount = Number(inputs.on_time_count);
+    const missedCount = Number(inputs.missed_count);
+    const score = inputs.membership_status === 'defaulted'
+      ? 0
+      : dueCount === 0
+        ? 50
+        : Math.round(Math.max(0, Math.min(100, 20 + (60 * onTimeCount / dueCount) + (20 * (dueCount - missedCount) / dueCount))));
+    const level = score >= 80 ? 'highly_committed' : score >= 50 ? 'building' : 'needs_attention';
+    const factors: TrustFactor[] = [
+      onTimeCount === dueCount && dueCount > 0
+        ? { code: 'ON_TIME', label: 'Contribution timeliness', effect: 'positive', summary: 'All due contributions have been completed on time' }
+        : { code: 'TIMELINESS', label: 'Contribution timeliness', effect: 'neutral', summary: 'The score reflects confirmed due contribution outcomes' },
+      missedCount === 0
+        ? { code: 'NO_MISSES', label: 'Missed contributions', effect: 'positive', summary: 'No recorded missed contribution deadlines' }
+        : { code: 'MISSED_CONTRIBUTIONS', label: 'Missed contributions', effect: 'negative', summary: 'Recorded missed deadlines reduce the score' },
+    ];
+    const sourceFingerprint = createHash('sha256')
+      .update(JSON.stringify({ membershipId, formulaId: formula.id, dueCount, onTimeCount, missedCount, status: inputs.membership_status, latestPaymentAt: inputs.latest_payment_at }))
+      .digest('hex');
+    const calculationKey = `member-v1:${membershipId}:${sourceFingerprint}`;
+
+    await client.query(
+      `INSERT INTO trust_score_snapshots
+         (subject_type, formula_version_id, chama_id, membership_id, score, level,
+          factors, calculation_key, source_fingerprint)
+       SELECT 'member', $2, cm.chama_id, cm.id, $3, $4, $5::jsonb, $6, $7
+       FROM chama_members cm
+       WHERE cm.id = $1
+       ON CONFLICT (calculation_key) DO NOTHING`,
+      [membershipId, formula.id, score, level, JSON.stringify(factors), calculationKey, sourceFingerprint],
+    );
   }
 
   private async getActiveFormula(subjectType: 'member' | 'chama'): Promise<FormulaRow | null> {

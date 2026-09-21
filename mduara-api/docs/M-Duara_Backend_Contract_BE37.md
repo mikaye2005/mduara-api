@@ -717,9 +717,11 @@ For local integration after migrations:
 ```powershell
 $env:NODE_ENV="development"
 $env:MDUARA_ENABLE_DEV_SEED="true"
-npm run db:migrate
+npm run migrate
 npm run db:seed:dev
 ```
+
+`npm run migrate` requires `SUPER_ADMIN_FULL_NAME`, `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PHONE`, and `SUPER_ADMIN_PIN` in `.env`; it provisions the configured platform administrator after the schema is current. Use `npm run db:migrate` only for an intentional schema-only migration.
 
 Representative prototype login:
 

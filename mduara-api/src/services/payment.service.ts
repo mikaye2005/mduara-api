@@ -3,6 +3,7 @@ import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { pool } from '../db/client';
 import { withDatabaseTransaction } from '../db/transaction';
 import { env } from '../config/env';
+import { trustScoreService } from './trust-score.service';
 import { BadRequestError, ConflictError, ForbiddenError, NotFoundError, ServiceUnavailableError, UnprocessableEntityError } from '../utils/errors';
 
 export interface StkPushInput {
@@ -321,6 +322,7 @@ export class PaymentService {
       if (confirmed > expected) throw new ConflictError('Confirmed contribution payments exceed expected amount', 'CONTRIBUTION_OVERPAID');
       const contributionStatus = confirmed === expected ? 'paid' : 'partially_paid';
       await client.query(`UPDATE contributions SET status = $2::contribution_status WHERE id = $1`, [row.contribution_id, contributionStatus]);
+      await trustScoreService.refreshMembershipScore(client, row.member_id);
 
       const updated = await client.query<ProviderLogRow>(
         `UPDATE payment_provider_logs

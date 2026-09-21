@@ -2,12 +2,23 @@
 
 ## Database setup
 
-The API uses PostgreSQL directly through `pg` and SQL migrations. Copy `.env.example` to `.env` and set `DATABASE_URL` to a PostgreSQL database before running migrations.
+The API uses PostgreSQL directly through `pg` and SQL migrations. Copy `.env.example` to `.env`, set `DATABASE_URL`, and configure the initial platform administrator before running migrations.
+
+```bash
+SUPER_ADMIN_FULL_NAME=Platform Administrator
+SUPER_ADMIN_EMAIL=admin@example.com
+SUPER_ADMIN_PHONE=+254712345678
+SUPER_ADMIN_PIN=<private-4-to-6-digit-pin>
+```
 
 ```bash
 npm install
-npm run db:migrate
+npm run migrate
 ```
+
+`npm run migrate` loads `.env`, applies migrations, then creates an active, verified platform super administrator with `is_platform_admin = true`. It is idempotent: an account with the same email and phone is activated and promoted if necessary, while its existing PIN is preserved. The command validates the four `SUPER_ADMIN_*` values before applying migrations, so a missing or invalid 4-6 digit PIN cannot leave a newly provisioned database without its administrator.
+
+Use `npm run db:migrate` only when a schema-only migration is intentional; it does not bootstrap a super administrator.
 
 The canonical initial schema is `migrations/001_initial_schema.sql`. Migration state is tracked by `node-pg-migrate`, and migrations run transactionally so a failed initial provision cannot leave a half-created database. The runtime connection pool is exported from `src/db/client.ts`.
 
@@ -88,7 +99,7 @@ must populate `contributions` with each member's expected amount and due date.
 
 ```bash
 npm install
-npm run db:migrate
+npm run migrate
 npm run build
 npm start        # API process
 npm run worker  # separate, supervised worker process

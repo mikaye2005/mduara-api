@@ -13,7 +13,8 @@ app.use(cors());
 app.use(express.json({
   limit: '1mb',
   verify: (req, _res, buffer) => {
-    if (req.originalUrl.includes('/api/v1/payments/callback') || req.originalUrl.includes('/api/v1/payments/mpesa/callback')) {
+    const url = req.url ?? '';
+    if (url.includes('/api/v1/payments/callback') || url.includes('/api/v1/payments/mpesa/callback')) {
       (req as typeof req & { rawBody?: Buffer }).rawBody = Buffer.from(buffer);
     }
   },

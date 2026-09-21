@@ -1,7 +1,6 @@
 import { app } from './app';
 import { env } from './config/env';
 import { closeDatabase } from './db/client';
-import { closeRedis } from './config/redis';
 import { logger } from './utils/logger';
 
 const server = app.listen(env.PORT, () => {
@@ -11,7 +10,7 @@ const server = app.listen(env.PORT, () => {
 async function shutdown(signal: string): Promise<void> {
   logger.info(`Received ${signal}, shutting down gracefully`);
   server.close(async () => {
-    await Promise.allSettled([closeDatabase(), closeRedis()]);
+    await Promise.allSettled([closeDatabase()]);
     process.exit(0);
   });
 }

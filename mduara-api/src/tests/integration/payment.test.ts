@@ -30,6 +30,14 @@ test('BE-05 STK callback is idempotent and atomically posts contribution + ledge
   const chamaId = (await db.query<{id:string}>(`INSERT INTO chamas (name,type,status,visibility,contribution_amount,contribution_frequency,pooled_amount,currency) VALUES ('BE05 Chama','goal_based','active','public',3000,'monthly',0,'KES') RETURNING id`)).rows[0].id;
   const memberId = (await db.query<{id:string}>(`INSERT INTO chama_members (chama_id,user_id,membership_status) VALUES ($1,$2,'active') RETURNING id`, [chamaId,userId])).rows[0].id;
   const contributionId = (await db.query<{id:string}>(`INSERT INTO contributions (chama_id,member_id,expected_amount,due_date,period_label) VALUES ($1,$2,3000,CURRENT_DATE,'2026-09') RETURNING id`, [chamaId,memberId])).rows[0].id;
+  await db.query(
+    `INSERT INTO trust_score_formula_versions
+       (subject_type,version,status,public_description,inputs,weights,levels,definition_hash,created_by,approved_by,approved_at,activated_at)
+     VALUES ('member','member-v1','active','Contribution outcomes determine the member score.',
+             '["on_time_contributions","missed_contributions"]','{"on_time_contributions":0.6,"missed_contributions":0.4}',
+             '["needs_attention","building","highly_committed"]',$1,$2,$2,CURRENT_TIMESTAMP,CURRENT_TIMESTAMP)`,
+    ['cf07a082ddb545d6a12451ebfdf6e4f839c8290faea785d22e992cf6ecf96775', userId],
+  );
 
   const service = new PaymentService(db, fakeGateway);
   const pending = await service.initiateStkPush({ userId, contributionId, amount: 3000n, phoneNumber: '+254700000099' });
@@ -46,6 +54,8 @@ test('BE-05 STK callback is idempotent and atomically posts contribution + ledge
   assert.equal(Number((await db.query(`SELECT COUNT(*)::int AS count FROM ledger_transactions WHERE reference='mpesa:stk:BE05RCPT001'`)).rows[0].count), 1);
   assert.equal((await db.query<{pooled_amount:string}>(`SELECT pooled_amount::text FROM chamas WHERE id=$1`, [chamaId])).rows[0].pooled_amount, '3000');
   assert.equal((await db.query<{status:string}>(`SELECT status::text FROM contributions WHERE id=$1`, [contributionId])).rows[0].status, 'paid');
+  const trust = (await db.query<{score:string;level:string}>(`SELECT score::text, level FROM trust_score_snapshots WHERE membership_id = $1`, [memberId])).rows[0];
+  assert.deepEqual(trust, { score: '100.00', level: 'highly_committed' });
 });
 
 test('BE-05 failed provider callback never posts money', { skip: !databaseUrl, timeout: 120_000 }, async (t) => {

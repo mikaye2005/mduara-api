@@ -1,3 +1,5 @@
+import type { ActiveChamaMembership, AuthenticatedUser as AuthorizationUser } from './auth';
+
 export type ChamaMembershipRole = 'member' | 'chair' | 'secretary' | 'treasurer';
 
 export interface SessionMembershipClaim {
@@ -75,6 +77,8 @@ declare global {
   namespace Express {
     interface Request {
       user?: AuthenticatedUser;
+      auth?: AuthorizationUser;
+      chamaMembership?: ActiveChamaMembership;
     }
   }
 }
