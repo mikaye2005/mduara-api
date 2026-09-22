@@ -47,11 +47,11 @@ test('BE-21 platform administration, telemetry and audit boundaries', { skip: !d
   )).rows[0].id;
   await db.query(`INSERT INTO chama_members (chama_id,user_id,role,membership_status) VALUES ($1,$2,'member','active')`, [chama, member]);
   await db.query(`INSERT INTO chama_applications (chama_id,user_id,status) VALUES ($1,$2,'pending')`, [chama, memberTwo]);
-  await db.query(
+  const ticket = (await db.query<{ id: string }>(
     `INSERT INTO support_tickets (ticket_code,user_id,chama_id,category,subject,message,status,routing_target)
-     VALUES ($1,$2,$3,'payment_issue','Payment concern','Please inspect','open','platform_admin')`,
+     VALUES ($1,$2,$3,'payment_issue','Payment concern','Please inspect','open','platform_admin') RETURNING id`,
     [`MD-${randomUUID().replace(/-/g,'').slice(0,6).toUpperCase()}`, member, chama],
-  );
+  )).rows[0].id;
 
   await t.test('overview uses live counts and exposes no cached prototype figures', async () => {
     const overview = await service.overview(new Date());
@@ -77,6 +77,38 @@ test('BE-21 platform administration, telemetry and audit boundaries', { skip: !d
       `SELECT COUNT(*)::int AS count FROM audit_logs WHERE actor_id=$1 AND entity_id=$2 AND action='platform_admin_user_status_changed'`,[admin,member],
     )).rows[0].count);
     assert.equal(auditCount, 2);
+  });
+
+  await t.test('platform search, membership and role operations are scoped and audited', async () => {
+    const search = await service.search('Member Two');
+    assert.ok(search.users.some((row: { id: string }) => row.id === memberTwo));
+
+    const membership = await service.addMembership(admin, chama, {
+      userId: memberTwo, role: 'member', membershipStatus: 'active', reason: 'Approved assisted onboarding request',
+    });
+    assert.equal(membership.status, 'active');
+    const changed = await service.changeRole(admin, chama, memberTwo, {
+      role: 'secretary', reason: 'Approved leadership assignment correction',
+    });
+    assert.equal(changed.role, 'secretary');
+    const events = Number((await db.query<{ count: number }>(
+      `SELECT COUNT(*)::int AS count FROM audit_logs WHERE actor_id=$1 AND entity_id=$2`, [admin, membership.id],
+    )).rows[0].count);
+    assert.equal(events, 2);
+  });
+
+  await t.test('ticket notes and broadcasts preserve operational evidence', async () => {
+    const note = await service.addTicketComment(admin, ticket, { body: 'Provider evidence verified.', internal: true });
+    assert.equal(note.is_internal, true);
+    const comments = await service.listTicketComments(ticket);
+    assert.equal(comments.length, 1);
+
+    const queued = await service.broadcast(admin, {
+      audience: 'platform_admins', channels: ['in_app'], title: 'Operations review',
+      body: 'Please review the current platform operations queue.', reason: 'Coordinate the scheduled access review',
+    });
+    assert.ok(Number(queued.recipientCount) >= 2);
+    assert.equal(queued.notificationCount, Number(queued.recipientCount));
   });
 
   await t.test('revenue reads the platform revenue ledger rather than provider rows', async () => {
