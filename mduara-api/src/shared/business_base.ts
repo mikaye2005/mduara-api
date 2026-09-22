@@ -1,4 +1,4 @@
-import type { Pool } from 'pg';
+import type { Pool, PoolClient } from 'pg';
 import { createHash, randomBytes } from 'node:crypto';
 import { pool } from '../db/client';
 import { withDatabaseTransaction } from '../db/transaction';
@@ -181,18 +181,22 @@ export abstract class BusinessBase {
 
 export class ChamaBusinessBase extends BusinessBase {
 	async createChama(params: CreateChamaParams) {
+		return this.transaction((client) => this.createChamaWithinTransaction(client, params));
+	}
+
+	async createChamaWithinTransaction(client: PoolClient, params: CreateChamaParams) {
 		if (!params.created_by) {
 			throw new Error('Authenticated founder is required to create a Chama');
 		}
 
-		return this.transaction(async (client) => {
+			const joinCode = `MD${randomBytes(4).toString('hex').toUpperCase()}`;
 			const result = await client.query(
 				`INSERT INTO chamas (
 				   name, description, type, contribution_amount, contribution_frequency,
 				   meeting_schedule, target_amount, visibility, goal_code, location,
 				   target_members, recruitment_deadline, saving_start_date, saving_end_date,
-				   purchase_window_start, purchase_window_end, created_by
-				 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17)
+				   purchase_window_start, purchase_window_end, created_by, public_join_code
+				 ) VALUES ($1,$2,$3,$4,$5,$6,$7,$8,$9,$10,$11,$12,$13,$14,$15,$16,$17,$18)
 				 RETURNING *`,
 				[
 					params.name,
@@ -212,6 +216,7 @@ export class ChamaBusinessBase extends BusinessBase {
 					params.purchase_window_start ?? null,
 					params.purchase_window_end ?? null,
 					params.created_by,
+					joinCode,
 				],
 			);
 
@@ -281,7 +286,6 @@ export class ChamaBusinessBase extends BusinessBase {
 			}
 
 			return chama;
-		});
 	}
 
 

@@ -13,6 +13,16 @@ interface BucketRow extends QueryResultRow {
   secondary?: string;
 }
 
+interface ChamaOverviewRow extends QueryResultRow {
+  active_members: string;
+  total_expected: string;
+  total_collected: string;
+  outstanding: string;
+  paid_on_time: string;
+  pending: string;
+  missed: string;
+}
+
 export class AnalyticsService {
   constructor(private readonly db: Pool = pool) {}
 
@@ -24,10 +34,11 @@ export class AnalyticsService {
     if (!chama) throw new NotFoundError('Chama not found', 'CHAMA_NOT_FOUND');
 
     const { start, bucket } = rangeWindow(range, now);
-    const [growth, compliance, repayments] = await Promise.all([
+    const [growth, compliance, repayments, overview] = await Promise.all([
       this.capitalGrowth(chamaId, start, bucket),
       this.contributionCompliance(chamaId, start, bucket),
       this.loanRepaymentRatios(chamaId, start, bucket),
+      this.chamaOverview(chamaId),
     ]);
 
     return {
@@ -36,9 +47,50 @@ export class AnalyticsService {
       range,
       bucket,
       generatedAt: now.toISOString(),
+      overview,
       growth,
       contributionCompliance: compliance,
       loanRepaymentRatios: repayments,
+    };
+  }
+
+  private async chamaOverview(chamaId: string) {
+    const row = (await this.db.query<ChamaOverviewRow>(
+      `WITH confirmed AS (
+         SELECT contribution_id, COALESCE(SUM(amount) FILTER (WHERE status = 'confirmed'), 0)::bigint AS amount
+           FROM contribution_payments
+          GROUP BY contribution_id
+       ), obligations AS (
+         SELECT c.id, c.expected_amount, c.due_date, c.status::text AS status, c.missed_at,
+                COALESCE(confirmed.amount, 0) AS collected
+           FROM contributions c
+           LEFT JOIN confirmed ON confirmed.contribution_id = c.id
+          WHERE c.chama_id = $1 AND c.status <> 'waived'
+       )
+       SELECT
+         (SELECT COUNT(*) FROM chama_members WHERE chama_id = $1 AND membership_status = 'active')::text AS active_members,
+         COALESCE(SUM(expected_amount), 0)::text AS total_expected,
+         COALESCE(SUM(collected), 0)::text AS total_collected,
+         COALESCE(SUM(GREATEST(expected_amount - collected, 0)), 0)::text AS outstanding,
+         COUNT(*) FILTER (WHERE due_date <= CURRENT_DATE AND collected >= expected_amount AND missed_at IS NULL)::text AS paid_on_time,
+         COUNT(*) FILTER (WHERE due_date >= CURRENT_DATE AND collected < expected_amount)::text AS pending,
+         COUNT(*) FILTER (WHERE missed_at IS NOT NULL OR (due_date < CURRENT_DATE AND collected < expected_amount))::text AS missed
+       FROM obligations`,
+      [chamaId],
+    )).rows[0];
+    const missed = Number(row?.missed ?? 0);
+    const pending = Number(row?.pending ?? 0);
+    return {
+      activeMembers: Number(row?.active_members ?? 0),
+      totalExpected: row?.total_expected ?? '0',
+      totalCollected: row?.total_collected ?? '0',
+      outstanding: row?.outstanding ?? '0',
+      memberPerformance: {
+        paidOnTime: Number(row?.paid_on_time ?? 0),
+        pending,
+        missed,
+      },
+      status: missed > 0 ? 'behind' as const : pending > 0 ? 'needs_attention' as const : 'on_track' as const,
     };
   }
 

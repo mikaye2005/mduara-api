@@ -11,5 +11,7 @@ router.post('/:id/accept-constitution', authenticate, membershipController.accep
 // Client requests eligibility/intent only. Provider confirmation remains the
 // sole authority that moves money and finalizes a refund.
 router.post('/:id/commitment/refund-request', authenticate, membershipController.requestCommitmentRefund);
+router.post('/:id/commitment/pay', authenticate, membershipController.initiateCommitmentPayment);
+router.post('/commitment/mpesa/callback', membershipController.commitmentMpesaCallback);
 
 export default router;

@@ -6,6 +6,7 @@ import { publicChamaService } from '../services/public-chama.service';
 import { smsService } from '../services/sms.service';
 import { notificationService } from '../services/notification.service';
 import { env } from '../config/env';
+import { chamaRegistrationService } from '../services/chama-registration.service';
 import type { CreateChamaParams } from '../shared/business_base';
 import { applicationIdSchema, constitutionAmendSchema, constitutionSetupSchema, createChamaSchema, inviteSchema, listApplicationsSchema, listInvitationsSchema, listMembersSchema, reviewApplicationSchema, updateChamaSchema, updateMemberSchema } from '../validation/chama.validation';
 import { publicChamaApplySchema, publicChamaListSchema } from '../validation/public-chama.validation';
@@ -36,12 +37,37 @@ async function notifyApplicationApproved(result: any): Promise<void> {
 export async function createChama(req: Request, res: Response, next: NextFunction) {
 	try {
 		if (!req.user?.id) throw new UnauthorizedError();
-		const payload = createChamaSchema.parse(req.body) as CreateChamaParams;
-		const created = await chamaService.createChama({ ...payload, created_by: req.user.id });
-		res.status(201).json({ data: created });
+    const payload = createChamaSchema.parse(req.body) as CreateChamaParams & { phone_number: string };
+    const { phone_number: phoneNumber, ...creation } = payload;
+    const payment = await chamaRegistrationService.initiate({ founderId: req.user.id, phoneNumber, creation });
+    res.status(202).json({ data: payment });
 	} catch (error) {
 		next(error);
 	}
+}
+
+export async function getChamaRegistrationPayment(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.id) throw new UnauthorizedError();
+    res.json({ data: await chamaRegistrationService.getStatus(req.user.id, req.params.checkoutId) });
+  } catch (error) { next(error); }
+}
+
+export async function chamaRegistrationMpesaCallback(req: Request, res: Response, next: NextFunction) {
+  const payload = req.body;
+  const verification = (await import('../services/payment.service')).verifyMpesaCallbackRequest({
+    ipAddress: req.ip,
+    signature: req.header('x-mduara-signature') ?? req.header('x-callback-signature') ?? undefined,
+    payload,
+  });
+  if (!verification.ok) {
+    next(new BadRequestError('M-Pesa callback verification failed', undefined, 'MPESA_CALLBACK_UNVERIFIED'));
+    return;
+  }
+  try {
+    const result = await chamaRegistrationService.processStkCallback(payload);
+    res.json({ ResultCode: 0, ResultDesc: 'Accepted', data: result });
+  } catch (error) { next(error); }
 }
 
 
@@ -355,6 +381,13 @@ export async function getPublicChamaDetail(req: Request, res: Response, next: Ne
   }
 }
 
+export async function getPublicChamaDetailByJoinCode(req: Request, res: Response, next: NextFunction) {
+  try {
+    const detail = await publicChamaService.getPublicDetailByJoinCode(req.params.joinCode);
+    res.json({ data: detail });
+  } catch (error) { next(error); }
+}
+
 export async function applyToChama(req: Request, res: Response, next: NextFunction) {
   try {
     if (!req.user?.id) throw new UnauthorizedError();
@@ -380,6 +413,8 @@ export async function applyToChama(req: Request, res: Response, next: NextFuncti
 
 export default {
   createChama,
+  getChamaRegistrationPayment,
+  chamaRegistrationMpesaCallback,
   listConstitutionTemplates,
   getChamaConstitution,
   configureChamaRules,
@@ -399,5 +434,6 @@ export default {
   updateChamaMember,
   listPublicChamas,
   getPublicChamaDetail,
+  getPublicChamaDetailByJoinCode,
   applyToChama,
 };

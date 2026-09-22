@@ -43,14 +43,26 @@ export const constitutionAmendSchema = constitutionRuleFieldsSchema.extend({
 export const createChamaSchema = z.object({
   name: z.string().min(3),
   description: z.string().optional(),
-  type: z.enum(['goal_based', 'table_banking', 'merry_go_round', 'welfare', 'investment']),
+  type: z.literal('goal_based'),
+  goal_code: z.string().trim().min(1).max(100),
   contribution_amount: z.coerce.number().int().positive(),
   contribution_frequency: z.string().min(1),
+  target_members: z.coerce.number().int().min(2),
+  recruitment_deadline: isoDateSchema,
+  saving_start_date: isoDateSchema,
+  saving_end_date: isoDateSchema,
+  visibility: z.enum(['public', 'application', 'private']),
+  constitution: constitutionSetupSchema,
+  phone_number: z.string().trim().min(9).max(20),
   meeting_schedule: z.string().optional(),
   target_amount: z.coerce.number().int().positive().optional().nullable(),
   constitution_template: constitutionTemplateCodeSchema.optional(),
-  constitution: constitutionSetupSchema.optional(),
 }).merge(chamaCycleFieldsSchema).superRefine((value, ctx) => {
+  for (const field of ['goal_code', 'target_members', 'recruitment_deadline', 'saving_start_date', 'saving_end_date', 'visibility'] as const) {
+    if (value[field] === undefined || value[field] === null) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: `${field} is required when starting a Chama` });
+    }
+  }
   if (value.saving_start_date && value.saving_end_date && value.saving_end_date < value.saving_start_date) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['saving_end_date'], message: 'saving_end_date cannot precede saving_start_date' });
   }

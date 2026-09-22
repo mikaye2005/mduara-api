@@ -245,7 +245,7 @@ export class PublicChamaService {
          WHERE chama_id = $1
          GROUP BY chama_id
        )
-       SELECT c.id, c.name, c.description, c.type::text AS type, c.status::text AS status,
+      SELECT c.id, c.name, c.public_join_code, c.description, c.type::text AS type, c.status::text AS status,
               c.visibility::text AS visibility, c.goal_code, c.location, c.logo_url,
               c.target_members, c.recruitment_deadline::text, c.recruitment_closed_at::text,
               c.saving_start_date::text, c.saving_end_date::text,
@@ -290,6 +290,7 @@ export class PublicChamaService {
     const rule = ruleResult.rows[0] ?? null;
     return {
       id: chama.id,
+      publicJoinCode: chama.public_join_code,
       name: chama.name,
       description: chama.description,
       type: chama.type,
@@ -310,6 +311,16 @@ export class PublicChamaService {
       }),
       recruitmentDeadline: chama.recruitment_deadline,
       recruitmentClosedAt: chama.recruitment_closed_at,
+
+  async getPublicDetailByJoinCode(joinCode: string) {
+    const result = await this.db.query<{ id: string }>(
+      `SELECT id FROM chamas
+        WHERE public_join_code = $1 AND visibility IN ('public', 'application')`,
+      [joinCode.trim().toUpperCase()],
+    );
+    if (!result.rows[0]) throw new NotFoundError('Chama not found');
+    return this.getPublicDetail(result.rows[0].id);
+  }
       savingStartDate: chama.saving_start_date,
       savingEndDate: chama.saving_end_date,
       purchaseWindowStart: chama.purchase_window_start,

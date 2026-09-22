@@ -786,30 +786,6 @@ CREATE TRIGGER trg_member_merchant_reward_audit
 AFTER INSERT OR UPDATE OF state ON member_merchant_rewards
 FOR EACH ROW EXECUTE FUNCTION audit_member_merchant_reward_change();
 
--- Deterministic Phase 1 demo partners. These are prototype records, not claims of
--- real commercial partnerships. Commercial terms remain pending partner agreement.
-INSERT INTO partner_merchants (id, code, name, description, status, is_demo) VALUES
-    ('70000000-0000-4000-8000-000000000001', 'homeplus_appliances', 'HomePlus Appliances', 'Prototype appliance fulfilment partner for Phase 1 marketplace testing.', 'active', TRUE),
-    ('70000000-0000-4000-8000-000000000002', 'smartliving_kenya', 'SmartLiving Kenya', 'Prototype home-appliance partner used for deterministic marketplace integration.', 'active', TRUE),
-    ('70000000-0000-4000-8000-000000000003', 'appliance_hub', 'Appliance Hub', 'Prototype appliance partner used for deterministic marketplace integration.', 'active', TRUE);
-
-INSERT INTO goal_merchant_partnerships (
-    id, goal_id, merchant_id, status, offer_title, offer_summary, offer_terms,
-    reward_rules, valid_from, valid_until, is_demo
-) VALUES
-    ('71000000-0000-4000-8000-000000000001', '20000000-0000-4000-8000-000000000001', '70000000-0000-4000-8000-000000000001', 'active',
-     'Washing Machine Goal Partner Offer', 'Prototype partner offer for server-confirmed eligible M-Duara members.',
-     'Final commercial terms require merchant agreement.', '{"eligibility":"server_confirmed","commercialTerms":"pending_partner_agreement"}',
-     '2026-01-01T00:00:00Z', NULL, TRUE),
-    ('71000000-0000-4000-8000-000000000002', '20000000-0000-4000-8000-000000000001', '70000000-0000-4000-8000-000000000002', 'active',
-     'Washing Machine Goal Partner Offer', 'Prototype partner offer for server-confirmed eligible M-Duara members.',
-     'Final commercial terms require merchant agreement.', '{"eligibility":"server_confirmed","commercialTerms":"pending_partner_agreement"}',
-     '2026-01-01T00:00:00Z', NULL, TRUE),
-    ('71000000-0000-4000-8000-000000000003', '20000000-0000-4000-8000-000000000001', '70000000-0000-4000-8000-000000000003', 'active',
-     'Washing Machine Goal Partner Offer', 'Prototype partner offer for server-confirmed eligible M-Duara members.',
-     'Final commercial terms require merchant agreement.', '{"eligibility":"server_confirmed","commercialTerms":"pending_partner_agreement"}',
-     '2026-01-01T00:00:00Z', NULL, TRUE);
-
 ALTER TABLE ledger_entries
     ADD CONSTRAINT fk_ledger_entries_member
     FOREIGN KEY (member_id, chama_id) REFERENCES chama_members(id, chama_id) ON DELETE RESTRICT;

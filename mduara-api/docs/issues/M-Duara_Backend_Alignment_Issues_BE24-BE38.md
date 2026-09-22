@@ -352,7 +352,7 @@ priority: critical
 Provide seed fixtures that mirror the approved prototype so frontend integration can be tested against realistic, repeatable backend data.
 
 ## Tasks
-- [ ] Seed a user with 3+ Chama memberships and one official role in exactly one Chama (e.g. Aisha as Secretary in Summertides '27).
+- [ ] Cover a user with 3+ Chama memberships and one official role in exactly one Chama in integration tests.
 - [ ] Seed Member-only Chamas including Future Home and Washing Machine Mbogi.
 - [ ] Seed approved goal categories/items and goal aggregate data inputs.
 - [ ] Seed public/application/private Chamas with officials and Constitution/rules.

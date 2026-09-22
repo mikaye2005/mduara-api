@@ -4,6 +4,8 @@ import goalController from '../controllers/goal.controller';
 import pollController from '../controllers/poll.controller';
 import reportController from '../controllers/report.controller';
 import meetingController from '../controllers/meeting.controller';
+import chamaMessageController from '../controllers/chama-message.controller';
+import chamaContributionController from '../controllers/chama-contribution.controller';
 import { authenticate, optionalAuthenticate } from '../middlewares/auth.middleware';
 import { requireChamaMembership, requireChamaRoles } from '../middlewares/authorization.middleware';
 import { requireDetailedPdfExportIfRequested } from '../middlewares/subscription.middleware';
@@ -22,6 +24,10 @@ router.get('/', chamaController.listPublicChamas);
 router.post('/match', optionalAuthenticate, goalController.matchGoalChamas);
 router.get('/public', chamaController.listPublicChamas);
 router.get('/public/:id', chamaController.getPublicChamaDetail);
+router.get('/join/:joinCode', chamaController.getPublicChamaDetailByJoinCode);
+
+router.post('/registration-payments/mpesa/callback', chamaController.chamaRegistrationMpesaCallback);
+router.get('/registration-payments/:checkoutId', authenticate, chamaController.getChamaRegistrationPayment);
 
 // Chama creation is atomic: the authenticated founder becomes the initial active chairperson.
 router.post('/', authenticate, chamaController.createChama);
@@ -170,6 +176,27 @@ router.get(
   authenticate,
   requireChamaMembership(byRouteId),
   chamaController.listChamaMembers,
+);
+
+router.get(
+  '/:id/messages',
+  authenticate,
+  requireChamaMembership(byRouteId),
+  chamaMessageController.listChamaMessages,
+);
+
+router.post(
+  '/:id/messages',
+  authenticate,
+  requireChamaMembership(byRouteId),
+  chamaMessageController.createChamaMessage,
+);
+
+router.get(
+  '/:id/contributions',
+  authenticate,
+  requireChamaMembership(byRouteId),
+  chamaContributionController.listChamaContributions,
 );
 
 router.patch(

@@ -57,9 +57,9 @@ Response:
   "data": {
     "user": {
       "id": "uuid",
-      "fullName": "Aisha Kamau",
-      "phone": "+254730200300",
-      "email": "aisha.kamau.dev@mduara.test",
+      "fullName": "Jane Mwangi",
+      "phone": "+254712345678",
+      "email": "jane@example.com",
       "avatarUrl": null,
       "dateOfBirth": null,
       "status": "active",
@@ -72,7 +72,7 @@ Response:
       {
         "membershipId": "uuid",
         "chamaId": "uuid",
-        "name": "Summertides '27",
+        "name": "Diani Holiday 2027",
         "logoUrl": null,
         "membershipStatus": "active",
         "role": "secretary",
@@ -93,15 +93,9 @@ Membership `role` values are `member | chair | secretary | treasurer`. `official
 
 `defaultContext.workspace` is deliberately `member`. An office holder remains a Member and may enter the official workspace in the client using the same `membershipId`; the server does not accept a client-selected role as proof of authority.
 
-### Approved multi-Chama fixture example
+### Multi-Chama context
 
-The deterministic development fixture user **Aisha Kamau** has exactly:
-
-1. `Summertides '27` — active, `role: secretary`, `officialRole: secretary`.
-2. `Future Home` — active, `role: member`, `officialRole: null`.
-3. `Washing Machine Mbogi` — active, `role: member`, `officialRole: null`.
-
-Her default context is Summertides because the session service chooses the first active membership from the authoritative database ordering. Switching the client to Future Home must not preserve Secretary privileges from Summertides.
+The session returns every membership created for the authenticated user. The default context is selected from the authoritative database ordering. Switching between Chamas must not preserve an official role from the previously selected Chama.
 
 A platform administrator is represented independently by `isPlatformAdmin: true`. Chama office roles never imply platform administration.
 
@@ -214,6 +208,22 @@ Additional detail fields include:
 For `goal_based` Chamas, the public detail deliberately reports `targetAmount: null`; the collective Chama target must not be presented as the individual member's personal savings target.
 
 ## 4. Join/application contract
+
+## 4. Start a Chama
+
+### `POST /chamas`
+
+Requires authentication. Launch accepts only `goal_based` Chamas and requires `goal_code`, contribution amount/frequency, target members, recruitment deadline, saving dates, visibility, Constitution fields, and `phone_number`.
+
+This endpoint starts a KSh 3,000 M-Pesa STK payment; it does **not** create a Chama yet. A successful response is HTTP `202` and includes `paymentId`, `checkoutRequestId`, `amount: "3000"`, and `status: "pending"`.
+
+### `GET /chamas/registration-payments/:checkoutId`
+
+Requires the founder's authentication. Use this to poll the payment status. Once the provider callback is confirmed, it returns `status: "confirmed"` and the created `chamaId`.
+
+The provider callback is `POST /chamas/registration-payments/mpesa/callback`. It is signature/source verified server-side. Only a confirmed callback for the exact KSh 3,000 amount creates the Chama, its founder chairperson membership, initial Constitution, and immutable platform-fee journal.
+
+## 5. Join/application contract
 
 ### `POST /chamas/:id/apply`
 
@@ -551,7 +561,7 @@ Public-safe Chama trust response.
 
 Member trust/history is authenticated and owner-only.
 
-Until an approved active scoring formula exists:
+When no active scoring formula has been provisioned:
 
 ```json
 {
@@ -560,7 +570,7 @@ Until an approved active scoring formula exists:
       "type": "member",
       "membershipId": "uuid",
       "chamaId": "uuid",
-      "chamaName": "Summertides '27"
+      "chamaName": "Diani Holiday 2027"
     },
     "available": false,
     "score": null,
@@ -710,23 +720,6 @@ This is the stable machine-readable next-action state. Treating it as an HTTP er
 9. Do not derive trust scores, merchant eligibility, or financial standing client-side.
 10. Treat all KES `BIGINT` values returned as strings as exact money values.
 
-## 13. Development fixture reference
+## 13. Clean database initialization
 
-For local integration after migrations:
-
-```powershell
-$env:NODE_ENV="development"
-$env:MDUARA_ENABLE_DEV_SEED="true"
-npm run migrate
-npm run db:seed:dev
-```
-
-`npm run migrate` requires `SUPER_ADMIN_FULL_NAME`, `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PHONE`, and `SUPER_ADMIN_PIN` in `.env`; it provisions the configured platform administrator after the schema is current. Use `npm run db:migrate` only for an intentional schema-only migration.
-
-Representative prototype login:
-
-- Aisha Kamau: `+254730200300`, PIN `3579`.
-- Secretary only in `Summertides '27`.
-- Ordinary Member in `Future Home` and `Washing Machine Mbogi`.
-
-The seed is development/test-only and fails closed in production.
+`npm run migrate` requires `SUPER_ADMIN_FULL_NAME`, `SUPER_ADMIN_EMAIL`, `SUPER_ADMIN_PHONE`, and `SUPER_ADMIN_PIN` in `.env`; it creates only the configured platform administrator and required reference catalog data. Users and Chamas are created through the normal API flows. Use `npm run db:migrate` only for an intentional schema-only migration.

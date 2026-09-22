@@ -494,36 +494,14 @@ Coverage includes:
 
 `createPostgresChamaMembershipRepository()` exists as an injectable factory so the regression suite exercises the same SQL used by production middleware against an isolated test schema. The normal production middleware still uses the shared application pool.
 
-## Deterministic development fixtures (BE-36)
+## Clean database setup
 
-BE-36 provides a **development/test-only** seed runner at `src/db/development-seed.ts`. It is intentionally separate from the canonical production migration. The migration remains responsible for the approved canonical goal catalog and the three BE-33 Washing Machine demo merchant partnerships; the BE-36 runner verifies those dependencies and adds repeatable integration fixtures on top.
-
-The fixture uses stable UUIDs for every seeded user, Chama, Constitution and membership. Re-running the seed is idempotent: fixture rows are updated by their stable IDs and the script refuses to create a second fixture with a colliding phone, email, Chama name or membership identity.
-
-Primary multi-Chama demo identity:
-
-- **Aisha Kamau** (`+254730200300`, prototype PIN `3579`) has exactly three active memberships: Secretary in **Summertides '27**, Member in **Future Home**, and Member in **Washing Machine Mbogi**. Her most-recent membership is Summertides, so the existing deterministic session-context selection chooses it as her default Chama while still returning all three memberships.
-- **Mumbi Wanjiru**, **David Mwangi**, **Peter Ouma** and platform admin **John Kamau** use the prototype phone/PIN pairs for local frontend integration. Additional named officials are fixture principals only and are not advertised as demo login accounts.
-- `Summertides '27` is the representative **private** Chama, `Future Home` is **application** visibility, and `Next Step Founders` plus `Washing Machine Mbogi` provide **public** fixtures. Every representative Chama has an active versioned Constitution with the Phase 1 KSh 500 default commitment amount.
-- `Future Home` intentionally has `goal_code = NULL`: the approved canonical Phase 1 goal catalog currently has no House / Land goal, and BE-36 does not invent one merely to make the fixture look complete. `Washing Machine Mbogi` uses canonical `washing_machine` and supplies real inputs for BE-30 marketplace metrics/matching; the canonical BE-33 merchant seed supplies its three active partner merchants.
-
-Production protection is fail-closed. The reusable seed function itself runs the guard, not only the CLI. It refuses `NODE_ENV=production`, requires `MDUARA_ENABLE_DEV_SEED=true`, refuses remote database hosts unless `MDUARA_ALLOW_REMOTE_DEV_SEED=true`, and refuses the default `postgres` database unless `MDUARA_ALLOW_SYSTEM_DATABASE_SEED=true` is separately set. Do not set those development overrides in production deployment configuration.
-
-Local PowerShell example after migrations:
-
-```powershell
-$env:NODE_ENV="development"
-$env:MDUARA_ENABLE_DEV_SEED="true"
-npm run db:migrate
-npm run db:seed:dev
-```
-
-For an intentionally remote **non-production** development database, additionally set `$env:MDUARA_ALLOW_REMOTE_DEV_SEED="true"`. The normal local `DATABASE_URL` in `.env` is used by the seed runner.
+Migrations create only the schema, reference goal catalog, and the platform administrator configured through `SUPER_ADMIN_*`. They do not create mock users, Chamas, memberships, contribution records, merchant offers, or prototype credentials. Create all operational data through the normal API flows.
 
 
 ## Frontend integration contract (BE-37)
 
-The canonical workspace-aware frontend/API contract is maintained in `docs/M-Duara_Backend_Contract_BE37.md`. It documents exact request/response shapes for `/auth/me`, public Chama discovery/joining, goal catalog/metrics/matching, member commitment state, trust score, merchant rewards, Aisha's deterministic multi-Chama fixture, and stable `error.code` handling.
+The canonical workspace-aware frontend/API contract is maintained in `docs/M-Duara_Backend_Contract_BE37.md`. It documents exact request/response shapes for `/auth/me`, public Chama discovery/joining, goal catalog/metrics/matching, member commitment state, trust score, merchant rewards, and stable `error.code` handling.
 
 BE-37 also makes centralized API failures machine-readable. The standard failure envelope now includes `error.code` in addition to the existing human-readable `message` and optional `details`. Chama-scoped middleware uses stable domain codes such as `CHAMA_SCOPE_REQUIRED`, `CHAMA_MEMBERSHIP_INACTIVE`, and `CHAMA_ROLE_FORBIDDEN`; join flow uses `PRIVATE_CHAMA_INVITE_REQUIRED`, `CONSTITUTION_NOT_ACCEPTED`, and `CONSTITUTION_VERSION_CONFLICT`. A valid join that still needs the commitment deposit remains a successful `outcome: commitment_required`, not an HTTP error.
 
@@ -831,11 +809,18 @@ Read APIs:
 - `GET /api/v1/admin/overview` — live user/Chama/application/support counts plus confirmed payment volume for the current Nairobi business day.
 - `GET /api/v1/admin/revenue?range=1m|3m|6m|1y|all` — time-bucketed platform revenue from the canonical `platform_fee_revenue` ledger account. Subscription revenue is separated using the immutable ledger transaction metadata written by BE-10; provider/payment tables are not independently summed as accounting revenue.
 - `GET /api/v1/admin/users` — paginated/searchable identity status, safe active-Chama count and office contexts.
+- `GET /api/v1/admin/search?q=...` — bounded platform search across users, Chamas, provider payments and support tickets.
+- `GET /api/v1/admin/users/:userId` — complete operational user view: memberships, recent tickets/payments and related audit events.
 - `GET /api/v1/admin/chamas` — paginated/searchable platform metadata and active-member counts. Pooled balances and member financial details are intentionally omitted.
+- `GET /api/v1/admin/chamas/:chamaId` — privileged Chama control view with members, leadership, Constitution versions, applications, loans and support cases.
 - `GET /api/v1/admin/payments` — read-only provider operational state without phone numbers or raw callback/request payloads.
+- `GET /api/v1/admin/payments/:paymentId` — evidence-preserving provider, ledger, reconciliation and audit trace for one payment.
 - `GET /api/v1/admin/refunds` and `/defaults` — privacy-reduced commitment lifecycle oversight; monetary amounts are intentionally omitted.
 - `GET /api/v1/admin/applications` — Chama application oversight. The response declares the workflow Chama-governed; platform administration does not bypass Chair/Secretary admission rules.
-- `GET /api/v1/admin/tickets` (`/complaints` alias) — support queue oversight. Mutations continue through the audited BE-19 support domain.
+- `GET /api/v1/admin/loans` — platform-wide loan and guarantor-coverage oversight without bypassing the loan approval state machine.
+- `GET /api/v1/admin/tickets` (`/complaints` alias) and `GET /tickets/:ticketId` — support queue and evidence/comment history.
+- `GET /api/v1/admin/notifications` — paginated delivery history across all supported channels.
+- `GET /api/v1/admin/administrators` — active platform-administrator directory and live session counts; grants remain outside generic moderation.
 - `GET /api/v1/admin/suspicious-activity` — transparent operational heuristics for rapid joins, repeated failed payments and unusual refund frequency. Rules and windows are returned with the response, and signals are explicitly not fraud determinations.
 - `GET /api/v1/admin/system-health` — scheduler run health, report/reminder queues, meeting reminder failures, notification delivery failures, stale provider payments and latest ledger reconciliation state.
 - `GET /api/v1/admin/audit-logs` — paginated immutable audit trail.
@@ -843,6 +828,10 @@ Read APIs:
 Safe moderation:
 
 - `PATCH /api/v1/admin/users/:userId/status` accepts `suspend`, `reactivate`, or soft `delete` with a mandatory reason.
+- `POST /api/v1/admin/chamas/:chamaId/members` adds an existing account to one Chama with a scoped role, onboarding state and mandatory administrative reason.
+- `PATCH /api/v1/admin/chamas/:chamaId/members/:userId/role` changes exactly one Chama-scoped role with old/new role and reason captured in the immutable audit trail.
+- `PATCH /api/v1/admin/tickets/:ticketId` reuses the BE-19 assignment/status/resolution state machine; `POST /tickets/:ticketId/comments` adds an evidence-linked note (internal by default).
+- `POST /api/v1/admin/broadcasts` queues an audited broadcast to active users, platform administrators or the active members of one Chama. Audience scope, channels, message and reason are validated before any notification rows are written.
 - suspension and deletion increment `session_version`, immediately invalidating outstanding sessions; reactivation also increments it so old credentials cannot silently become valid again.
 - only previously active users can be suspended and only suspended users can be reactivated through this endpoint.
 - an administrator cannot moderate their own account, and platform-admin accounts cannot be changed by this generic moderation path. Admin hierarchy/peer-admin governance requires a separately approved policy.
