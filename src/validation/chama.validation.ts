@@ -6,6 +6,7 @@ const chamaRoleSchema = z.enum(DATABASE_CHAMA_ROLES);
 const isoDateSchema = z.string().regex(/^\d{4}-\d{2}-\d{2}$/, 'Expected YYYY-MM-DD');
 
 const constitutionTemplateCodeSchema = z.enum(['custom', 'savings', 'goal_based', 'merry_go_round', 'investment']);
+const chamaTypeSchema = z.enum(['goal_based', 'table_banking', 'merry_go_round', 'welfare', 'investment']);
 const jsonPolicySchema = z.record(z.unknown());
 
 export const constitutionRuleFieldsSchema = z.object({
@@ -43,8 +44,8 @@ export const constitutionAmendSchema = constitutionRuleFieldsSchema.extend({
 export const createChamaSchema = z.object({
   name: z.string().min(3),
   description: z.string().optional(),
-  type: z.literal('goal_based'),
-  goal_code: z.string().trim().min(1).max(100),
+  type: chamaTypeSchema,
+  goal_code: z.string().trim().min(1).max(100).optional().nullable(),
   contribution_amount: z.coerce.number().int().positive(),
   contribution_frequency: z.string().min(1),
   target_members: z.coerce.number().int().min(2),
@@ -58,10 +59,13 @@ export const createChamaSchema = z.object({
   target_amount: z.coerce.number().int().positive().optional().nullable(),
   constitution_template: constitutionTemplateCodeSchema.optional(),
 }).merge(chamaCycleFieldsSchema).superRefine((value, ctx) => {
-  for (const field of ['goal_code', 'target_members', 'recruitment_deadline', 'saving_start_date', 'saving_end_date', 'visibility'] as const) {
+  for (const field of ['target_members', 'recruitment_deadline', 'saving_start_date', 'saving_end_date', 'visibility'] as const) {
     if (value[field] === undefined || value[field] === null) {
       ctx.addIssue({ code: z.ZodIssueCode.custom, path: [field], message: `${field} is required when starting a Chama` });
     }
+  }
+  if (value.type === 'goal_based' && !value.goal_code) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['goal_code'], message: 'goal_code is required for a goal-based Chama' });
   }
   if (value.saving_start_date && value.saving_end_date && value.saving_end_date < value.saving_start_date) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['saving_end_date'], message: 'saving_end_date cannot precede saving_start_date' });
@@ -72,6 +76,54 @@ export const createChamaSchema = z.object({
   if (value.constitution_template && value.constitution?.template_code
       && value.constitution_template !== value.constitution.template_code) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['constitution_template'], message: 'constitution_template must match constitution.template_code when both are provided' });
+  }
+});
+
+const wizardConstitutionSectionsSchema = z.object({
+  commitmentAndDefault: z.string().trim().min(20),
+  contributionRules: z.string().trim().min(20),
+  dissolution: z.string().trim().min(20),
+  exitAndWithdrawal: z.string().trim().min(20),
+  memberConductAndDisputes: z.string().trim().min(20),
+  payoutRules: z.string().trim().min(20),
+  purposeAndGoal: z.string().trim().min(20),
+  votingAndDecisions: z.string().trim().min(20),
+}).strict();
+
+/** Compatibility contract used by the current Start Chama wizard. */
+export const createChamaWizardSchema = z.object({
+  autoCloseRecruitment: z.boolean(),
+  constitution: z.object({
+    sections: wizardConstitutionSectionsSchema,
+    version: z.literal(1),
+  }).strict(),
+  contributionAmount: z.coerce.number().int().positive(),
+  contributionFrequency: z.enum(['weekly', 'biweekly', 'monthly']),
+  contributionStartDate: isoDateSchema,
+  creationSource: z.enum(['self_service', 'platform_admin']),
+  description: z.string().trim().max(2000).optional(),
+  durationMonths: z.coerce.number().int().positive().max(120),
+  founderIdentifier: z.string().trim().min(1).optional(),
+  goalCode: z.string().trim().min(1).max(100).optional(),
+  joiningWindowEndsAt: isoDateSchema,
+  location: z.string().trim().max(255).optional(),
+  logoUrl: z.string().trim().url().optional(),
+  name: z.string().trim().min(3).max(255),
+  purpose: z.string().trim().min(1).max(2000),
+  recruitmentMode: z.enum(['public', 'application', 'private']),
+  setupPaymentMode: z.enum(['mpesa', 'deferred']),
+  targetAmount: z.coerce.number().int().positive(),
+  targetMembers: z.coerce.number().int().min(2),
+  type: z.enum(['savings', 'goal_based', 'merry_go_round', 'investment']),
+}).strict().superRefine((value, ctx) => {
+  if (value.type === 'goal_based' && !value.goalCode) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['goalCode'], message: 'Choose a configured saving goal' });
+  }
+  if (value.contributionAmount > value.targetAmount) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['contributionAmount'], message: 'Contribution amount cannot exceed target amount' });
+  }
+  if (value.creationSource === 'platform_admin' && !value.founderIdentifier) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['founderIdentifier'], message: 'Founder identifier is required for platform provisioning' });
   }
 });
 

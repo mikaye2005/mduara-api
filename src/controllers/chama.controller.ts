@@ -6,11 +6,13 @@ import { publicChamaService } from '../services/public-chama.service';
 import { smsService } from '../services/sms.service';
 import { notificationService } from '../services/notification.service';
 import { env } from '../config/env';
+import { pool } from '../db/client';
 import { chamaRegistrationService } from '../services/chama-registration.service';
+import { writeAuditEvent } from '../services/audit.service';
 import type { CreateChamaParams } from '../shared/business_base';
-import { applicationIdSchema, constitutionAmendSchema, constitutionSetupSchema, createChamaFrontendSchema, createChamaSchema, inviteSchema, listApplicationsSchema, listInvitationsSchema, listMembersSchema, reviewApplicationSchema, updateChamaSchema, updateMemberSchema } from '../validation/chama.validation';
+import { applicationIdSchema, constitutionAmendSchema, constitutionSetupSchema, createChamaFrontendSchema, createChamaSchema, createChamaWizardSchema, inviteSchema, listApplicationsSchema, listInvitationsSchema, listMembersSchema, reviewApplicationSchema, updateChamaSchema, updateMemberSchema } from '../validation/chama.validation';
 import { publicChamaApplySchema, publicChamaListSchema } from '../validation/public-chama.validation';
-import { BadRequestError, UnauthorizedError } from '../utils/errors';
+import { BadRequestError, ForbiddenError, NotFoundError, UnauthorizedError } from '../utils/errors';
 
 
 async function notifyApplicationApproved(result: any): Promise<void> {
@@ -37,10 +39,26 @@ async function notifyApplicationApproved(result: any): Promise<void> {
 export async function createChama(req: Request, res: Response, next: NextFunction) {
 	try {
 		if (!req.user?.id) throw new UnauthorizedError();
+    const wizardPayload = createChamaWizardSchema.safeParse(req.body);
     const frontendPayload = createChamaFrontendSchema.safeParse(req.body);
     let phoneNumber: string;
+    let founderId = req.user.id;
     let creation: CreateChamaParams;
-    if (frontendPayload.success) {
+    let wizardName: string | null = null;
+    if (wizardPayload.success) {
+      if (wizardPayload.data.creationSource === 'platform_admin') {
+        if (!req.user.isPlatformAdmin) {
+          throw new ForbiddenError('Platform administrator authentication is required', 'CHAMA_FOUNDER_PROVISIONING_FORBIDDEN');
+        }
+        const founder = await findProvisioningFounder(wizardPayload.data.founderIdentifier!);
+        founderId = founder.id;
+        phoneNumber = founder.phone;
+      } else {
+        phoneNumber = req.user.phone;
+      }
+      wizardName = wizardPayload.data.name;
+      creation = toCreateChamaWizardParams(wizardPayload.data);
+    } else if (frontendPayload.success) {
       phoneNumber = req.user.phone;
       creation = toCreateChamaParams(frontendPayload.data);
     } else {
@@ -49,11 +67,112 @@ export async function createChama(req: Request, res: Response, next: NextFunctio
       const { phone_number: _phoneNumber, ...canonicalCreation } = payload;
       creation = canonicalCreation;
     }
-    const payment = await chamaRegistrationService.initiate({ founderId: req.user.id, phoneNumber, creation });
-    res.status(202).json({ data: payment });
+    const payment = await chamaRegistrationService.initiate({ founderId, phoneNumber, creation });
+    if (wizardPayload.success && wizardPayload.data.creationSource === 'platform_admin') {
+      await writeAuditEvent(pool, {
+        category: 'moderation',
+        action: 'platform_admin_chama_provisioned',
+        actorId: req.user.id,
+        actorRole: 'platform_admin',
+        chamaId: payment.chamaId ?? null,
+        entityType: 'chama_registration_payment',
+        entityId: payment.paymentId,
+        ipAddress: req.ip,
+        userAgent: req.get('user-agent') ?? null,
+        payload: { founderId, founderIdentifier: wizardPayload.data.founderIdentifier, paymentStatus: payment.status },
+      });
+    }
+    const confirmed = payment.status === 'confirmed' && Boolean(payment.chamaId);
+    res.status(confirmed ? 201 : 202).json({
+      data: {
+        ...payment,
+        ...(confirmed ? {
+          chama: {
+            id: payment.chamaId,
+            name: wizardName ?? creation.name,
+            shareLink: 'joinUrl' in payment ? payment.joinUrl : null,
+          },
+          registrationPayment: { id: payment.paymentId, required: false },
+          founderMembership: { role: 'chair', status: 'active' },
+        } : {
+          registrationPayment: { id: payment.paymentId, required: true },
+        }),
+      },
+    });
 	} catch (error) {
 		next(error);
 	}
+}
+
+async function findProvisioningFounder(identifier: string): Promise<{ id: string; phone: string }> {
+  const result = await pool.query<{ id: string; phone: string }>(
+    `SELECT id, phone
+       FROM users
+      WHERE status = 'active'
+        AND (id::text = $1 OR lower(email) = lower($1) OR phone = $1)
+      LIMIT 1`,
+    [identifier.trim()],
+  );
+  const founder = result.rows[0];
+  if (!founder) {
+    throw new NotFoundError('No active user matches the supplied founder email, phone number, or user ID', 'CHAMA_FOUNDER_NOT_FOUND');
+  }
+  return founder;
+}
+
+function toCreateChamaWizardParams(payload: ReturnType<typeof createChamaWizardSchema.parse>): CreateChamaParams {
+  const savingStartDate = new Date(`${payload.contributionStartDate}T00:00:00.000Z`);
+  const savingEndDate = new Date(savingStartDate);
+  savingEndDate.setUTCMonth(savingEndDate.getUTCMonth() + payload.durationMonths);
+  const sections = payload.constitution.sections;
+  const typeMap = {
+    savings: 'table_banking',
+    goal_based: 'goal_based',
+    merry_go_round: 'merry_go_round',
+    investment: 'investment',
+  } as const;
+  const templateMap = {
+    savings: 'savings',
+    goal_based: 'goal_based',
+    merry_go_round: 'merry_go_round',
+    investment: 'investment',
+  } as const;
+  return {
+    name: payload.name,
+    description: payload.description ?? payload.purpose,
+    type: typeMap[payload.type],
+    contribution_amount: payload.contributionAmount,
+    contribution_frequency: payload.contributionFrequency,
+    target_amount: payload.targetAmount,
+    visibility: payload.recruitmentMode,
+    goal_code: payload.type === 'goal_based' ? payload.goalCode : null,
+    location: payload.location,
+    target_members: payload.targetMembers,
+    recruitment_deadline: payload.joiningWindowEndsAt,
+    saving_start_date: payload.contributionStartDate,
+    saving_end_date: savingEndDate.toISOString().slice(0, 10),
+    constitution_template: templateMap[payload.type],
+    constitution: {
+      template_code: templateMap[payload.type],
+      purpose_goal: sections.purposeAndGoal || payload.purpose,
+      contribution_amount: payload.contributionAmount,
+      contribution_frequency: payload.contributionFrequency,
+      exit_withdrawal_policy: { text: sections.exitAndWithdrawal },
+      payout_policy: {
+        text: sections.payoutRules,
+        contribution_rules: sections.contributionRules,
+      },
+      conduct_dispute_policy: {
+        text: sections.memberConductAndDisputes,
+        commitment_and_default: sections.commitmentAndDefault,
+      },
+      dissolution_policy: {
+        text: sections.dissolution,
+        voting_and_decisions: sections.votingAndDecisions,
+        requires_member_vote: true,
+      },
+    },
+  };
 }
 
 function toCreateChamaParams(payload: ReturnType<typeof createChamaFrontendSchema.parse>): CreateChamaParams {

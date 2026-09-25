@@ -4,7 +4,7 @@ import { withDatabaseTransaction } from '../db/transaction';
 import { env } from '../config/env';
 import type { CreateChamaParams } from '../shared/business_base';
 import { ConflictError, NotFoundError, ServiceUnavailableError, UnprocessableEntityError, BadRequestError } from '../utils/errors';
-import { DarajaStkGateway, type MpesaCallbackPayload, type StkPushGateway } from './payment.service';
+import { createStkGateway, type MpesaCallbackPayload, type StkPushGateway } from './payment.service';
 import { chamaService } from './chama.service';
 
 const REGISTRATION_FEE = 3000n;
@@ -35,11 +35,11 @@ interface RegistrationPaymentRow extends QueryResultRow {
 export class ChamaRegistrationService {
   constructor(
     private readonly db: Pool = pool,
-    private readonly gateway: StkPushGateway = new DarajaStkGateway(),
+    private readonly gateway: StkPushGateway = createStkGateway(),
   ) {}
 
   async initiate(input: StartChamaRegistrationInput) {
-    if (!env.MPESA_CALLBACK_URL) {
+    if (env.MPESA_PROVIDER === 'daraja' && !env.MPESA_CALLBACK_URL) {
       throw new ServiceUnavailableError('Chama registration M-Pesa callback URL is not configured', 'CHAMA_REGISTRATION_MPESA_NOT_CONFIGURED');
     }
     const prepared = await withDatabaseTransaction(async (client) => {
@@ -82,6 +82,7 @@ export class ChamaRegistrationService {
           WHERE id = $1 AND status = 'pending'`,
         [prepared.paymentId, provider.merchantRequestId, provider.checkoutRequestId, JSON.stringify(provider.requestPayload)],
       );
+      if (provider.simulatedCallback) return this.processStkCallback(provider.simulatedCallback);
       return {
         paymentId: prepared.paymentId,
         checkoutRequestId: provider.checkoutRequestId,
