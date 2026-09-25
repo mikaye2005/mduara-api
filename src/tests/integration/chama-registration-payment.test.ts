@@ -4,7 +4,7 @@ import test from 'node:test';
 import migrate from 'node-pg-migrate';
 import { Pool } from 'pg';
 import { ChamaRegistrationService } from '../../services/chama-registration.service';
-import type { StkPushGateway } from '../../services/payment.service';
+import { ConsoleStkGateway, type StkPushGateway } from '../../services/payment.service';
 
 const databaseUrl = process.env.TEST_DATABASE_URL;
 
@@ -65,4 +65,36 @@ test('Chama creation waits for a confirmed KSh 3,000 registration payment', { sk
   assert.equal(Number((await db.query(`SELECT COUNT(*)::int AS count FROM chama_members WHERE chama_id = $1 AND user_id = $2 AND role = 'chairperson'`, [confirmed.chamaId, founderId])).rows[0].count), 1);
   assert.equal(Number((await db.query(`SELECT COUNT(*)::int AS count FROM ledger_entries WHERE chama_id = $1`, [confirmed.chamaId])).rows[0].count), 2);
   assert.equal((await service.processStkCallback(callback)).replayed, true);
+
+  const simulatedFounderId = randomUUID();
+  await db.query(
+    `INSERT INTO users (id, email, pin_hash, full_name, phone, status, is_email_verified)
+     VALUES ($1, 'simulated-founder@registration.test', 'pin', 'Simulated Founder', '+254700000077', 'active', TRUE)`,
+    [simulatedFounderId],
+  );
+  const simulated = await new ChamaRegistrationService(db, new ConsoleStkGateway()).initiate({
+    founderId: simulatedFounderId,
+    phoneNumber: '+254700000077',
+    creation: {
+      name: 'Console Payment Chama',
+      type: 'goal_based',
+      goal_code: 'emergency_fund',
+      contribution_amount: 2000,
+      contribution_frequency: 'monthly',
+      target_members: 10,
+      recruitment_deadline: '2026-11-15',
+      saving_start_date: '2026-12-01',
+      saving_end_date: '2027-05-31',
+      visibility: 'public',
+      constitution: { purpose_goal: 'Exercise the complete local onboarding flow' },
+    },
+  });
+  assert.equal(simulated.status, 'confirmed');
+  assert.ok(simulated.chamaId);
+  assert.match(simulated.receiptNumber ?? '', /^DEV/);
+  assert.equal(Number((await db.query(
+    `SELECT COUNT(*)::int AS count FROM chama_members
+      WHERE chama_id = $1 AND user_id = $2 AND role = 'chairperson' AND membership_status = 'active'`,
+    [simulated.chamaId, simulatedFounderId],
+  )).rows[0].count), 1);
 });

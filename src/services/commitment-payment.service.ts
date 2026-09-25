@@ -3,7 +3,7 @@ import { pool } from '../db/client';
 import { env } from '../config/env';
 import { ConflictError, NotFoundError, BadRequestError, UnprocessableEntityError, ServiceUnavailableError } from '../utils/errors';
 import { commitmentService } from './commitment.service';
-import { DarajaStkGateway, type MpesaCallbackPayload, type StkPushGateway } from './payment.service';
+import { createStkGateway, type MpesaCallbackPayload, type StkPushGateway } from './payment.service';
 
 interface AttemptRow extends QueryResultRow {
   id: string; commitment_id: string; membership_id: string; user_id: string; amount: string; currency: string;
@@ -12,10 +12,10 @@ interface AttemptRow extends QueryResultRow {
 }
 
 export class CommitmentPaymentService {
-  constructor(private readonly db: Pool = pool, private readonly gateway: StkPushGateway = new DarajaStkGateway()) {}
+  constructor(private readonly db: Pool = pool, private readonly gateway: StkPushGateway = createStkGateway()) {}
 
   async initiate(userId: string, membershipId: string, phoneNumber: string) {
-    if (!env.MPESA_CALLBACK_URL) throw new ServiceUnavailableError('Commitment M-Pesa callback URL is not configured', 'COMMITMENT_MPESA_NOT_CONFIGURED');
+    if (env.MPESA_PROVIDER === 'daraja' && !env.MPESA_CALLBACK_URL) throw new ServiceUnavailableError('Commitment M-Pesa callback URL is not configured', 'COMMITMENT_MPESA_NOT_CONFIGURED');
     const context = (await this.db.query<{ commitment_id: string; amount: string }>(
       `SELECT cd.id AS commitment_id, cd.amount::text
          FROM commitment_deposits cd
@@ -35,6 +35,7 @@ export class CommitmentPaymentService {
     try {
       const provider = await this.gateway.initiate({ amount: BigInt(context.amount), phoneNumber: phoneNumber, accountReference: `MDC${attempt.id.replace(/-/g, '').slice(0, 9)}`, description: 'Commitment Fee', callbackUrl: env.MPESA_CALLBACK_URL });
       await this.db.query(`UPDATE commitment_payment_attempts SET merchant_request_id = $2, checkout_request_id = $3, request_payload = $4::jsonb, updated_at = CURRENT_TIMESTAMP WHERE id = $1`, [attempt.id, provider.merchantRequestId, provider.checkoutRequestId, JSON.stringify(provider.requestPayload)]);
+      if (provider.simulatedCallback) return this.processStkCallback(provider.simulatedCallback);
       return { paymentId: attempt.id, checkoutRequestId: provider.checkoutRequestId, merchantRequestId: provider.merchantRequestId, amount: context.amount, currency: 'KES' as const, status: 'pending' as const, customerMessage: provider.customerMessage ?? null };
     } catch (error) {
       await this.db.query(`UPDATE commitment_payment_attempts SET status = 'failed', result_desc = $2, completed_at = CURRENT_TIMESTAMP WHERE id = $1`, [attempt.id, error instanceof Error ? error.message : 'STK initiation failed']);

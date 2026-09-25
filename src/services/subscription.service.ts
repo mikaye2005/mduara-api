@@ -11,7 +11,7 @@ import {
   UnprocessableEntityError,
 } from '../utils/errors';
 import {
-  DarajaStkGateway,
+  createStkGateway,
   type MpesaCallbackPayload,
   type StkPushGateway,
 } from './payment.service';
@@ -101,7 +101,7 @@ export interface SubscriptionEntitlements {
 export class SubscriptionService {
   constructor(
     private readonly db: Pool = pool,
-    private readonly gateway: StkPushGateway = new DarajaStkGateway(),
+    private readonly gateway: StkPushGateway = createStkGateway(),
     private readonly callbackUrl: string | undefined = env.MPESA_SUBSCRIPTION_CALLBACK_URL,
   ) {}
 
@@ -156,7 +156,7 @@ export class SubscriptionService {
           'SUBSCRIPTION_PRICE_NOT_CONFIGURED',
         );
       }
-      if (!this.callbackUrl) {
+      if (env.MPESA_PROVIDER === 'daraja' && !this.callbackUrl) {
         throw new ServiceUnavailableError('Subscription M-Pesa callback URL is not configured', 'SUBSCRIPTION_MPESA_NOT_CONFIGURED');
       }
 
@@ -210,6 +210,7 @@ export class SubscriptionService {
           WHERE id = $1 AND status = 'pending'`,
         [prepared.paymentId, provider.merchantRequestId, provider.checkoutRequestId, JSON.stringify(provider.requestPayload)],
       );
+      if (provider.simulatedCallback) return this.processStkCallback(provider.simulatedCallback);
       return {
         paymentId: prepared.paymentId,
         checkoutRequestId: provider.checkoutRequestId,

@@ -1,4 +1,4 @@
-import { createHmac, timingSafeEqual } from 'node:crypto';
+import { createHmac, randomUUID, timingSafeEqual } from 'node:crypto';
 import type { Pool, PoolClient, QueryResultRow } from 'pg';
 import { pool } from '../db/client';
 import { withDatabaseTransaction } from '../db/transaction';
@@ -29,6 +29,8 @@ export interface StkPushProviderResult {
   responseDescription?: string;
   customerMessage?: string;
   requestPayload: Record<string, unknown>;
+  /** Present only for the development console provider. Callers settle it through their normal callback path. */
+  simulatedCallback?: MpesaCallbackPayload;
 }
 
 export interface StkPushGateway {
@@ -153,8 +155,60 @@ export class DarajaStkGateway implements StkPushGateway {
   }
 }
 
+/**
+ * Development-only STK adapter. It never contacts Safaricom; instead it returns
+ * provider-shaped IDs plus a successful callback that each payment domain must
+ * process through its existing settlement boundary.
+ */
+export class ConsoleStkGateway implements StkPushGateway {
+  async initiate(request: StkPushProviderRequest): Promise<StkPushProviderResult> {
+    const token = randomUUID().replace(/-/g, '');
+    const merchantRequestId = `dev-merchant-${token}`;
+    const checkoutRequestId = `dev-checkout-${token}`;
+    const receipt = `DEV${token.slice(0, 20).toUpperCase()}`;
+    const phone = normalizeKenyanPhone(request.phoneNumber);
+    const requestPayload = {
+      provider: 'development_console',
+      simulated: true,
+      amount: request.amount.toString(),
+      phoneNumber: phone,
+      accountReference: request.accountReference,
+      description: request.description,
+    };
+    return {
+      merchantRequestId,
+      checkoutRequestId,
+      responseCode: '0',
+      responseDescription: 'Development console payment accepted',
+      customerMessage: 'Development payment was automatically confirmed.',
+      requestPayload,
+      simulatedCallback: {
+        Body: {
+          stkCallback: {
+            MerchantRequestID: merchantRequestId,
+            CheckoutRequestID: checkoutRequestId,
+            ResultCode: 0,
+            ResultDesc: 'Development console payment automatically confirmed',
+            CallbackMetadata: {
+              Item: [
+                { Name: 'Amount', Value: request.amount.toString() },
+                { Name: 'MpesaReceiptNumber', Value: receipt },
+                { Name: 'PhoneNumber', Value: phone },
+              ],
+            },
+          },
+        },
+      },
+    };
+  }
+}
+
+export function createStkGateway(): StkPushGateway {
+  return env.MPESA_PROVIDER === 'console' ? new ConsoleStkGateway() : new DarajaStkGateway();
+}
+
 export class PaymentService {
-  constructor(private readonly db: Pool = pool, private readonly gateway: StkPushGateway = new DarajaStkGateway()) {}
+  constructor(private readonly db: Pool = pool, private readonly gateway: StkPushGateway = createStkGateway()) {}
 
   async initiateStkPush(input: StkPushInput) {
     if (input.amount <= 0n) throw new BadRequestError('Payment amount must be greater than zero', undefined, 'PAYMENT_AMOUNT_INVALID');
@@ -191,6 +245,7 @@ export class PaymentService {
           WHERE id = $1`,
         [attempt.id, provider.merchantRequestId, provider.checkoutRequestId, JSON.stringify(provider.requestPayload)],
       );
+      if (provider.simulatedCallback) return this.processStkCallback(provider.simulatedCallback);
       return {
         paymentId: attempt.id,
         checkoutRequestId: provider.checkoutRequestId,

@@ -78,3 +78,15 @@ test('database URL resolver builds from DB_* values when DATABASE_URL is unset',
 
   assert.equal(url, 'postgres://local-user:local-password@localhost:5432/local-db');
 });
+
+test('development console payments are explicit and forbidden in production', () => {
+  assert.equal(loadEnv({ ...validBase, MPESA_PROVIDER: 'console' }).MPESA_PROVIDER, 'console');
+  assert.throws(
+    () => loadEnv({ ...validBase, NODE_ENV: 'production', MPESA_PROVIDER: 'console' }),
+    /development-only/,
+  );
+  assert.equal(
+    loadEnv({ ...validBase, NODE_ENV: 'production', MPESA_PROVIDER: 'daraja' }).MPESA_PROVIDER,
+    'daraja',
+  );
+});

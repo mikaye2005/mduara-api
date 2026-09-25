@@ -187,11 +187,13 @@ export class AdminService {
     )).rows[0]?.count ?? 0);
     const rows = await this.db.query<{
       id: string; name: string; type: string; status: string; visibility: string; goal_code: string | null; goal_name: string | null;
-      location: string | null; target_members: number | null; recruitment_deadline: string | null; recruitment_closed_at: string | null;
+      location: string | null; contribution_amount: string; contribution_frequency: string;
+      target_members: number | null; recruitment_deadline: string | null; recruitment_closed_at: string | null;
       created_at: string; active_members: number;
     }>(
       `SELECT c.id, c.name, c.type::text AS type, c.status::text AS status, c.visibility::text AS visibility,
-              c.goal_code, sg.name AS goal_name, c.location, c.target_members, c.recruitment_deadline::text,
+              c.goal_code, sg.name AS goal_name, c.location, c.contribution_amount::text, c.contribution_frequency,
+              c.target_members, c.recruitment_deadline::text,
               c.recruitment_closed_at::text, c.created_at::text,
               (SELECT COUNT(*)::int FROM chama_members cm WHERE cm.chama_id = c.id AND cm.membership_status = 'active') AS active_members
          FROM chamas c LEFT JOIN saving_goals sg ON sg.code = c.goal_code
@@ -202,7 +204,8 @@ export class AdminService {
     return { chamas: rows.rows.map((row) => ({
       id: row.id, name: row.name, type: row.type, status: row.status, visibility: row.visibility,
       goalCode: row.goal_code, goalName: row.goal_name, location: row.location, targetMembers: row.target_members,
-      activeMembers: Number(row.active_members), recruitmentDeadline: row.recruitment_deadline,
+      activeMembers: Number(row.active_members), contributionAmount: row.contribution_amount,
+      contributionFrequency: row.contribution_frequency, recruitmentDeadline: row.recruitment_deadline,
       recruitmentClosedAt: iso(row.recruitment_closed_at), createdAt: iso(row.created_at),
       financialDetailsIncluded: false,
     })), meta: pageMeta(total, input) };

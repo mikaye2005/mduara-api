@@ -105,6 +105,7 @@ const envSchema = z.object({
   MPESA_PASSKEY: optionalEnv(z.string()),
   MPESA_CALLBACK_URL: optionalEnv(z.string()),
   MPESA_SUBSCRIPTION_CALLBACK_URL: optionalEnv(z.string().url()),
+  MPESA_PROVIDER: z.enum(['console', 'daraja']).default('daraja'),
   MPESA_ENVIRONMENT: z.enum(['sandbox', 'production']).default('sandbox'),
   MPESA_STK_ENABLED: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
   MPESA_CALLBACK_ALLOWED_IPS: optionalEnv(z.string()),
@@ -160,6 +161,9 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env) {
     ] as const;
     const missing = requiredStorage.filter(([, value]) => !value).map(([name]) => name);
     if (missing.length) throw new Error(`File uploads are enabled but these settings are missing: ${missing.join(', ')}`);
+  }
+  if (parsed.data.NODE_ENV === 'production' && parsed.data.MPESA_PROVIDER === 'console') {
+    throw new Error('MPESA_PROVIDER=console is development-only and cannot be used in production.');
   }
 
   return {

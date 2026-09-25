@@ -20,6 +20,10 @@ npm run migrate
 
 Use `npm run db:migrate` only when a schema-only migration is intentional; it does not bootstrap a super administrator.
 
+### Local payment simulation
+
+Set `MPESA_PROVIDER=console` during local development when Daraja is not integrated. STK initiation is then automatically confirmed through the same callback settlement code used by real M-Pesa payments. This supports Chama registration, commitment deposits, member contributions, and subscription payments without weakening their state transitions or ledger writes. Console payment mode is rejected when `NODE_ENV=production`; production must use `MPESA_PROVIDER=daraja` with valid Daraja credentials and callback URLs.
+
 The canonical initial schema is `migrations/001_initial_schema.sql`. Migration state is tracked by `node-pg-migrate`, and migrations run transactionally so a failed initial provision cannot leave a half-created database. The runtime connection pool is exported from `src/db/client.ts`.
 
 The initial schema intentionally contains the complete Phase 1 data model, including identity/session tables, Chamas and memberships, applications/invitations, versioned Constitution rules and acceptance records, commitment deposits, contributions, double-entry ledger/audit records, loans/guarantors/repayments, meetings, notifications, governance polls, subscriptions and support tickets. Later backend issues should add behaviour around these structures instead of introducing competing tables for the same concepts.
