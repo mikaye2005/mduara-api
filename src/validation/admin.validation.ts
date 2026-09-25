@@ -20,6 +20,13 @@ export const adminUserStatusSchema = z.object({
   reason: z.string().trim().min(5).max(500),
 }).strict();
 
+export const adminProvisionUserSchema = z.object({
+  fullName: z.string().trim().min(2).max(150),
+  phone: z.string().trim().regex(/^\+[1-9]\d{7,14}$/),
+  email: z.string().trim().email().transform((value) => value.toLowerCase()),
+  temporaryPassword: z.string().trim().min(8).max(72),
+}).strict();
+
 export const adminChamaListSchema = z.object({
   page,
   per_page: perPage,

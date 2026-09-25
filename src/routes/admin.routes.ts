@@ -14,6 +14,7 @@ router.get('/overview', adminController.overview);
 router.get('/revenue', adminController.revenue);
 router.get('/search', adminController.search);
 router.get('/users', adminController.listUsers);
+router.post('/users', adminController.provisionUser);
 router.get('/users/:userId', adminController.getUser);
 router.patch('/users/:userId/status', adminController.moderateUser);
 router.get('/chamas', adminController.listChamas);

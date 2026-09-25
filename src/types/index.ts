@@ -59,6 +59,7 @@ export interface SessionContext {
     avatarUrl: string | null;
     dateOfBirth: string | null;
     status: string;
+    mustChangePassword: boolean;
     isEmailVerified: boolean;
     createdAt: string;
     updatedAt: string;
