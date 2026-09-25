@@ -13,6 +13,7 @@ interface UserRow {
   date_of_birth: string | null;
   status: string;
   is_email_verified: boolean;
+  must_change_password: boolean;
   is_platform_admin: boolean;
   created_at: string;
   updated_at: string;
@@ -43,7 +44,7 @@ export class SessionService {
     const [userResult, membershipResult] = await Promise.all([
       this.databasePool.query<UserRow>(
         `SELECT id, phone, email, full_name, national_id, avatar_url, date_of_birth, status,
-                is_email_verified, is_platform_admin, created_at, updated_at
+                is_email_verified, must_change_password, is_platform_admin, created_at, updated_at
          FROM users
          WHERE id = $1`,
         [userId],
@@ -98,6 +99,7 @@ export class SessionService {
         dateOfBirth: user.date_of_birth,
         status: user.status,
         isEmailVerified: user.is_email_verified,
+        mustChangePassword: user.must_change_password,
         createdAt: user.created_at,
         updatedAt: user.updated_at,
       },

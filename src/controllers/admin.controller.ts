@@ -9,6 +9,7 @@ import {
   adminRangeSchema,
   adminTicketListSchema,
   adminUserListSchema,
+  adminProvisionUserSchema,
   adminUserStatusSchema,
   adminBroadcastSchema,
   adminIdParamSchema,
@@ -31,6 +32,7 @@ function actor(req: Request): string {
 export async function overview(req: Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.overview()});}catch(e){next(e);}}
 export async function revenue(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminRangeSchema.parse(req.query);res.json({data:await adminService.revenue(q.range)});}catch(e){next(e);}}
 export async function listUsers(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminUserListSchema.parse(req.query);const r=await adminService.listUsers({page:q.page,perPage:q.per_page,status:q.status,q:q.q});res.json({data:r.users,meta:r.meta});}catch(e){next(e);}}
+export async function provisionUser(req:Request,res:Response,next:NextFunction){try{const id=actor(req);const body=adminProvisionUserSchema.parse(req.body) as {fullName:string;phone:string;email:string;temporaryPassword:string};res.status(201).json({data:await adminService.provisionUser(id,body,{ip:req.ip,userAgent:req.get('user-agent')??null})});}catch(e){next(e);}}
 export async function search(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminSearchSchema.parse(req.query);res.json({data:await adminService.search(q.q,q.limit)});}catch(e){next(e);}}
 export async function getUser(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.getUser(adminIdParamSchema.parse(req.params.userId))});}catch(e){next(e);}}
 export async function moderateUser(req:Request,res:Response,next:NextFunction){try{const id=actor(req);const body=adminUserStatusSchema.parse(req.body) as {action:'suspend'|'reactivate'|'delete';reason:string};res.json({data:await adminService.moderateUser(id,req.params.userId,body,{ip:req.ip,userAgent:req.get('user-agent')??null})});}catch(e){next(e);}}
@@ -55,4 +57,4 @@ export async function suspiciousActivity(req:Request,res:Response,next:NextFunct
 export async function systemHealth(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.systemHealth()});}catch(e){next(e);}}
 export async function auditLogs(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminAuditListSchema.parse(req.query);const r=await adminService.auditLogs({page:q.page,perPage:q.per_page,category:q.category,action:q.action,actorId:q.actor_id});res.json({data:r.logs,meta:r.meta});}catch(e){next(e);}}
 
-export default {overview,revenue,search,listUsers,getUser,moderateUser,listChamas,getChama,addMembership,changeRole,listPayments,getPayment,listRefunds,listDefaults,listApplications,listLoans,listTickets,getTicket,updateTicket,addTicketComment,listNotifications,broadcast,listAdministrators,suspiciousActivity,systemHealth,auditLogs};
+export default {overview,revenue,search,listUsers,provisionUser,getUser,moderateUser,listChamas,getChama,addMembership,changeRole,listPayments,getPayment,listRefunds,listDefaults,listApplications,listLoans,listTickets,getTicket,updateTicket,addTicketComment,listNotifications,broadcast,listAdministrators,suspiciousActivity,systemHealth,auditLogs};

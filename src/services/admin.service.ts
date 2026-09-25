@@ -4,6 +4,7 @@ import { withDatabaseTransaction } from '../db/transaction';
 import { env } from '../config/env';
 import { ConflictError, ForbiddenError, NotFoundError } from '../utils/errors';
 import { writeAuditEvent } from './audit.service';
+import { hashSecret } from '../utils/crypto.util';
 import type { AdminRange } from '../validation/admin.validation';
 
 type PageInput = { page: number; perPage: number };
@@ -12,6 +13,29 @@ type UserStatus = 'pending' | 'active' | 'suspended' | 'deleted';
 
 export class AdminService {
   constructor(private readonly db: Pool = pool) {}
+
+  async provisionUser(actorId: string, input: { fullName: string; phone: string; email: string; temporaryPassword: string }, context?: { ip?: string | null; userAgent?: string | null }) {
+    const passwordHash = await hashSecret(input.temporaryPassword);
+    return withDatabaseTransaction(async (client) => {
+      try {
+        const row = (await client.query<{ id: string; full_name: string; phone: string; email: string; status: string }>(
+          `INSERT INTO users (full_name, phone, email, pin_hash, status, is_email_verified, must_change_password)
+           VALUES ($1, $2, $3, $4, 'active', FALSE, TRUE)
+           RETURNING id, full_name, phone, email, status::text AS status`,
+          [input.fullName, input.phone, input.email, passwordHash],
+        )).rows[0];
+        await writeAuditEvent(client, {
+          category: 'security', action: 'platform_admin_user_provisioned', actorId, actorRole: 'platform_admin',
+          entityType: 'user', entityId: row.id, ipAddress: context?.ip, userAgent: context?.userAgent,
+          payload: { email: input.email, phone: input.phone, mustChangePassword: true },
+        });
+        return { id: row.id, fullName: row.full_name, phone: row.phone, email: row.email, status: row.status, mustChangePassword: true };
+      } catch (error) {
+        if ((error as { code?: string }).code === '23505') throw new ConflictError('An account with this phone number or email already exists');
+        throw error;
+      }
+    }, { isolationLevel: 'READ COMMITTED', maxRetries: 1 }, this.db);
+  }
 
   async overview(now = new Date()) {
     const [users, chamas, applications, tickets, payments] = await Promise.all([

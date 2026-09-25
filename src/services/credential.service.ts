@@ -141,6 +141,7 @@ export class CredentialService {
         await client.query(
           `UPDATE users
            SET pin_hash = $2,
+               must_change_password = FALSE,
                pin_changed_at = CURRENT_TIMESTAMP,
                failed_login_attempts = 0,
                login_locked_until = NULL,
