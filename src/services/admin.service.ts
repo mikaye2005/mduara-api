@@ -5,6 +5,7 @@ import { env } from '../config/env';
 import { ConflictError, ForbiddenError, NotFoundError } from '../utils/errors';
 import { writeAuditEvent } from './audit.service';
 import type { AdminRange } from '../validation/admin.validation';
+import { hashSecret } from '../utils/crypto.util';
 
 type PageInput = { page: number; perPage: number };
 
@@ -131,6 +132,39 @@ export class AdminService {
       isEmailVerified: row.is_email_verified, isPlatformAdmin: row.is_platform_admin,
       lastLoginAt: iso(row.last_login_at), createdAt: iso(row.created_at), chamaCount: Number(row.chama_count), contexts: row.contexts,
     })), meta: pageMeta(total, input) };
+  }
+
+  async createUser(
+    actorId: string,
+    input: { fullName: string; phone: string; email: string; password: string; nationalId?: string; reason: string },
+    context?: { ip?: string | null; userAgent?: string | null },
+  ) {
+    const passwordHash = await hashSecret(input.password);
+    try {
+      return await withDatabaseTransaction(async (client) => {
+        const row = (await client.query<{
+          id: string; full_name: string; phone: string; email: string; national_id: string | null; status: string; created_at: string;
+        }>(`INSERT INTO users (full_name,phone,email,pin_hash,national_id,status,status_reason,is_platform_admin)
+            VALUES ($1,$2,$3,$4,$5,'active',$6,FALSE)
+            RETURNING id,full_name,phone,email,national_id,status::text AS status,created_at::text`,
+          [input.fullName, input.phone, input.email, passwordHash, input.nationalId ?? null, input.reason],
+        )).rows[0];
+        await writeAuditEvent(client, {
+          category: 'moderation', action: 'platform_admin_user_created', actorId, actorRole: 'platform_admin',
+          entityType: 'user', entityId: row.id, ipAddress: context?.ip, userAgent: context?.userAgent,
+          payload: { fullName: row.full_name, phone: row.phone, email: row.email, status: row.status, reason: input.reason, isPlatformAdmin: false },
+        });
+        return {
+          id: row.id, fullName: row.full_name, phone: row.phone, email: row.email, nationalId: row.national_id,
+          status: row.status, isPlatformAdmin: false, createdAt: iso(row.created_at),
+        };
+      }, { isolationLevel: 'SERIALIZABLE', maxRetries: 2 }, this.db);
+    } catch (error) {
+      if ((error as { code?: string }).code === '23505') {
+        throw new ConflictError('An account already exists with this email, phone number, or national ID', 'ADMIN_USER_EXISTS');
+      }
+      throw error;
+    }
   }
 
   async moderateUser(actorId: string, userId: string, input: { action: 'suspend' | 'reactivate' | 'delete'; reason: string }, context?: { ip?: string | null; userAgent?: string | null }) {
@@ -416,6 +450,99 @@ export class AdminService {
       pooled_amount:String(chama.pooled_amount),members:members.rows,rules:rules.rows,tickets:tickets.rows,loans:loans.rows,applications:applications.rows };
   }
 
+  /**
+   * A deliberately read-only, Chama-scoped command payload for the management
+   * page. It exposes counts and evidence pointers, not provider secrets or
+   * raw payment payloads. Mutations stay on their explicit, audited endpoints.
+   */
+  async managementWorkspace(chamaId: string) {
+    const chama = (await this.db.query(`SELECT c.id,c.name,c.description,c.type::text AS type,c.status::text AS status,
+      c.visibility::text AS visibility,c.location,c.goal_code,c.target_members,c.recruitment_deadline::text,
+      c.recruitment_closed_at::text,c.contribution_amount::text,c.contribution_frequency,c.target_amount::text,
+      c.pooled_amount::text,c.currency,c.created_at::text,c.updated_at::text,sg.name AS goal_name
+      FROM chamas c LEFT JOIN saving_goals sg ON sg.code=c.goal_code WHERE c.id=$1`, [chamaId])).rows[0];
+    if (!chama) throw new NotFoundError('Chama not found', 'CHAMA_NOT_FOUND');
+
+    const [leaders, memberCounts, applications, contributions, payments, commitments, loans, payouts, governance, communications, support, subscription, audit] = await Promise.all([
+      this.db.query(`SELECT cm.user_id,u.full_name,u.phone,u.email,cm.role::text AS role,cm.joined_at::text
+        FROM chama_members cm JOIN users u ON u.id=cm.user_id
+        WHERE cm.chama_id=$1 AND cm.membership_status='active' AND cm.role IN ('chairperson','secretary','treasurer')
+        ORDER BY CASE cm.role WHEN 'chairperson' THEN 1 WHEN 'secretary' THEN 2 ELSE 3 END,u.full_name`, [chamaId]),
+      this.db.query(`SELECT COUNT(*) FILTER(WHERE membership_status='active')::int AS active,
+        COUNT(*) FILTER(WHERE membership_status='pending')::int AS pending,COUNT(*) FILTER(WHERE membership_status='exited')::int AS exited,
+        COUNT(*) FILTER(WHERE membership_status IN ('suspended','defaulted'))::int AS restricted
+        FROM chama_members WHERE chama_id=$1`, [chamaId]),
+      this.db.query(`SELECT COUNT(*) FILTER(WHERE status IN ('pending','commitment_pending'))::int AS awaiting_review,
+        COUNT(*) FILTER(WHERE status='approved')::int AS approved,COUNT(*) FILTER(WHERE status='rejected')::int AS rejected
+        FROM chama_applications WHERE chama_id=$1`, [chamaId]),
+      this.db.query(`SELECT COUNT(*) FILTER(WHERE status='pending')::int AS pending,
+        COUNT(*) FILTER(WHERE status='late')::int AS arrears,COUNT(*) FILTER(WHERE status='paid')::int AS paid,
+        COALESCE(SUM(expected_amount) FILTER(WHERE status IN ('pending','partially_paid','late')),0)::text AS outstanding_amount
+        FROM contributions WHERE chama_id=$1`, [chamaId]),
+      this.db.query(`SELECT COUNT(*) FILTER(WHERE status='pending')::int AS pending,COUNT(*) FILTER(WHERE status='failed')::int AS failed,
+        COUNT(*) FILTER(WHERE status='reversed')::int AS reversed,COUNT(*) FILTER(WHERE status='confirmed')::int AS confirmed
+        FROM payment_provider_logs WHERE chama_id=$1`, [chamaId]),
+      this.db.query(`SELECT COUNT(*) FILTER(WHERE state='refund_requested')::int AS refund_requests,
+        COUNT(*) FILTER(WHERE state='eligible_for_refund')::int AS eligible_refunds,
+        COUNT(*) FILTER(WHERE state IN ('at_risk','default_triggered','forfeited','partial_forfeit'))::int AS defaults_or_risk
+        FROM commitment_deposits WHERE chama_id=$1`, [chamaId]),
+      this.db.query(`SELECT COUNT(*) FILTER(WHERE status IN ('pending','awaiting_guarantors','pending_admin_approval','partially_approved','approved','disbursement_pending'))::int AS awaiting_decision,
+        COUNT(*) FILTER(WHERE status IN ('active','partially_repaid','defaulted'))::int AS open_or_arrears,
+        COUNT(*) FILTER(WHERE status='defaulted')::int AS defaulted,COALESCE(SUM(total_due) FILTER(WHERE status IN ('active','partially_repaid','defaulted')),0)::text AS outstanding_amount
+        FROM loans WHERE chama_id=$1`, [chamaId]),
+      this.db.query(`SELECT COUNT(*) FILTER(WHERE status IN ('scheduled','disbursement_pending'))::int AS upcoming,
+        COUNT(*) FILTER(WHERE status='disputed')::int AS disputed,COUNT(*) FILTER(WHERE status='paid')::int AS paid
+        FROM merry_go_round_payouts WHERE chama_id=$1`, [chamaId]),
+      this.db.query(`SELECT (SELECT COUNT(*)::int FROM chama_rules WHERE chama_id=$1) AS rule_versions,
+        (SELECT COUNT(*)::int FROM polls WHERE chama_id=$1 AND status IN ('open','draft')) AS open_decisions,
+        (SELECT COUNT(*)::int FROM polls WHERE chama_id=$1 AND status='closed' AND acted_at IS NULL) AS decisions_pending_record,
+        (SELECT COUNT(*)::int FROM polls WHERE chama_id=$1 AND decision_type='dissolution' AND status IN ('draft','open')) AS dissolution_votes_in_progress`, [chamaId]),
+      this.db.query(`SELECT (SELECT COUNT(*)::int FROM chama_meetings WHERE chama_id=$1 AND starts_at >= CURRENT_TIMESTAMP) AS upcoming_meetings,
+        (SELECT COUNT(*)::int FROM chama_broadcasts WHERE chama_id=$1) AS announcements,
+        (SELECT COUNT(*)::int FROM notifications WHERE chama_id=$1 AND event_type LIKE '%reminder%' AND status='failed') AS failed_reminders`, [chamaId]),
+      this.db.query(`SELECT COUNT(*) FILTER(WHERE status IN ('open','in_progress','escalated'))::int AS open_cases,
+        COUNT(*) FILTER(WHERE status='escalated')::int AS escalated_cases,COUNT(*) FILTER(WHERE status IN ('resolved','closed'))::int AS resolved_cases
+        FROM support_tickets WHERE chama_id=$1`, [chamaId]),
+      this.db.query(`SELECT ps.plan_code,ps.plan_name,ps.billing_frequency,ps.amount::text,ps.status::text AS status,
+        ps.current_period_end::text,ps.grace_ends_at::text,sp.max_members,sp.max_active_loans,sp.sms_quota_monthly,sp.allows_detailed_pdf
+        FROM platform_subscriptions ps JOIN subscription_plans sp ON sp.code=ps.plan_code WHERE ps.chama_id=$1`, [chamaId]),
+      this.db.query(`SELECT id,category::text AS category,action,actor_id,actor_role::text AS actor_role,entity_type,entity_id,created_at::text
+        FROM audit_logs WHERE chama_id=$1 ORDER BY created_at DESC,id DESC LIMIT 20`, [chamaId]),
+    ]);
+    return {
+      profile: chama,
+      leadership: leaders.rows,
+      members: memberCounts.rows[0], recruitment: applications.rows[0], contributions: contributions.rows[0],
+      reconciliation: payments.rows[0], commitments: commitments.rows[0], loans: loans.rows[0], payouts: payouts.rows[0],
+      governance: governance.rows[0], communications: communications.rows[0], support: support.rows[0],
+      subscription: subscription.rows[0] ?? null, auditHistory: audit.rows,
+      completion: {
+        status: chama.status,
+        outstandingLoans: Number(loans.rows[0]?.open_or_arrears ?? 0),
+        pendingRefunds: Number(commitments.rows[0]?.refund_requests ?? 0) + Number(commitments.rows[0]?.eligible_refunds ?? 0),
+        decisionsAwaitingRecord: Number(governance.rows[0]?.decisions_pending_record ?? 0),
+        dissolutionVotesInProgress: Number(governance.rows[0]?.dissolution_votes_in_progress ?? 0),
+      },
+      links: {
+        members: `/api/v1/admin/chamas/${chamaId}`, applications: `/api/v1/admin/applications`, payments: `/api/v1/admin/payments`,
+        reconciliation: `/api/v1/admin/reconciliation`, refunds: `/api/v1/admin/refunds`, defaults: `/api/v1/admin/defaults`,
+        loans: `/api/v1/admin/loans`, tickets: `/api/v1/admin/tickets`, audit: `/api/v1/admin/audit-logs?chama_id=${chamaId}`,
+      },
+    };
+  }
+
+  async moderateChama(actorId:string,chamaId:string,input:{action:'suspend'|'disable'|'restore'|'reactivate';reason:string},context?:{ip?:string|null;userAgent?:string|null}) {
+    return withDatabaseTransaction(async (client) => {
+      const current=(await client.query<{id:string;status:string}>(`SELECT id,status::text AS status FROM chamas WHERE id=$1 FOR UPDATE`,[chamaId])).rows[0];
+      if(!current) throw new NotFoundError('Chama not found','CHAMA_NOT_FOUND');
+      const next=(input.action==='disable'||input.action==='suspend')?'inactive':'active';
+      if(current.status===next) throw new ConflictError(`Chama is already ${next}`,'ADMIN_CHAMA_STATE_INVALID');
+      const row=(await client.query(`UPDATE chamas SET status=$2::chama_status,updated_at=CURRENT_TIMESTAMP WHERE id=$1 RETURNING id,status::text AS status`,[chamaId,next])).rows[0];
+      await writeAuditEvent(client,{category:'moderation',action:'platform_admin_chama_status_changed',actorId,actorRole:'platform_admin',chamaId,entityType:'chama',entityId:chamaId,ipAddress:context?.ip,userAgent:context?.userAgent,payload:{from:current.status,to:next,action:input.action,reason:input.reason}});
+      return {id:row.id,status:row.status,reason:input.reason};
+    },{isolationLevel:'SERIALIZABLE',maxRetries:2},this.db);
+  }
+
   async addMembership(actorId:string,chamaId:string,input:{userId:string;role:string;membershipStatus:string;reason:string},context?:{ip?:string|null;userAgent?:string|null}){
     return withDatabaseTransaction(async(client)=>{
       const chama=(await client.query<{id:string}>(`SELECT id FROM chamas WHERE id=$1 FOR UPDATE`,[chamaId])).rows[0];
@@ -591,13 +718,19 @@ export class AdminService {
     };
   }
 
-  async auditLogs(input: PageInput & { category?: string; action?: string; actorId?: string }) {
-    const values=[input.category??null,input.action??null,input.actorId??null] as unknown[];
-    const where=`($1::text IS NULL OR al.category::text=$1) AND ($2::text IS NULL OR al.action=$2) AND ($3::uuid IS NULL OR al.actor_id=$3)`;
+  async listReconciliation() {
+    const runs = await this.db.query(`SELECT id,provider,window_start::text AS window_start,window_end::text AS window_end,provider_record_count,matched_count,mismatch_count,started_at::text AS started_at,completed_at::text AS completed_at FROM ledger_reconciliation_runs ORDER BY started_at DESC LIMIT 100`);
+    const items = await this.db.query(`SELECT lri.id,lri.run_id,lri.status::text AS status,lri.provider_reference,lri.provider_amount::text AS provider_amount,lri.ledger_amount::text AS ledger_amount,lri.provider_currency,lri.ledger_currency,lri.provider_occurred_at::text AS provider_occurred_at,lri.created_at::text AS created_at FROM ledger_reconciliation_items lri WHERE lri.status <> 'matched' ORDER BY lri.created_at DESC LIMIT 200`);
+    return { runs: runs.rows, unmatched: items.rows };
+  }
+
+  async auditLogs(input: PageInput & { category?: string; action?: string; actorId?: string; chamaId?: string }) {
+    const values=[input.category??null,input.action??null,input.actorId??null,input.chamaId??null] as unknown[];
+    const where=`($1::text IS NULL OR al.category::text=$1) AND ($2::text IS NULL OR al.action=$2) AND ($3::uuid IS NULL OR al.actor_id=$3) AND ($4::uuid IS NULL OR al.chama_id=$4)`;
     const total=Number((await this.db.query<{count:number}>(`SELECT COUNT(*)::int AS count FROM audit_logs al WHERE ${where}`,values)).rows[0]?.count??0);
     const rows=await this.db.query<{id:string;category:string;action:string;actor_id:string|null;actor_role:string|null;chama_id:string|null;entity_type:string|null;entity_id:string|null;ip_address:string|null;user_agent:string|null;payload:unknown;created_at:string;actor_name:string|null}>(
       `SELECT al.id,al.category::text AS category,al.action,al.actor_id,al.actor_role::text,al.chama_id,al.entity_type,al.entity_id,al.ip_address::text,al.user_agent,al.payload,al.created_at::text,u.full_name AS actor_name
-         FROM audit_logs al LEFT JOIN users u ON u.id=al.actor_id WHERE ${where} ORDER BY al.created_at DESC,al.id DESC LIMIT $4 OFFSET $5`,
+         FROM audit_logs al LEFT JOIN users u ON u.id=al.actor_id WHERE ${where} ORDER BY al.created_at DESC,al.id DESC LIMIT $5 OFFSET $6`,
       [...values,input.perPage,(input.page-1)*input.perPage]);
     return {logs:rows.rows.map(r=>({id:r.id,category:r.category,action:r.action,actor:r.actor_id?{id:r.actor_id,name:r.actor_name,role:r.actor_role}:null,chamaId:r.chama_id,entityType:r.entity_type,entityId:r.entity_id,ipAddress:r.ip_address,userAgent:r.user_agent,payload:r.payload,createdAt:iso(r.created_at)})),meta:pageMeta(total,input)};
   }

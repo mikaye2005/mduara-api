@@ -33,7 +33,7 @@ export async function mpesaCallback(req: Request, res: Response, next: NextFunct
     signature: req.header('x-mduara-signature') ?? req.header('x-callback-signature') ?? undefined,
     payload,
   });
-  if (!verification.ok) {
+  if (verification.ok === false) {
     try { await paymentService.recordRejectedCallback({ ipAddress: req.ip, reason: verification.reason, payload }); } catch { /* rejection still fails closed */ }
     next(new BadRequestError('M-Pesa callback verification failed', undefined, 'MPESA_CALLBACK_UNVERIFIED'));
     return;

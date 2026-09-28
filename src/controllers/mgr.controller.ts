@@ -57,7 +57,7 @@ async function assertVerifiedMpesaCallback(req: Request): Promise<void> {
     signature: req.header('x-mduara-signature') ?? req.header('x-callback-signature') ?? undefined,
     payload,
   });
-  if (verification.ok) return;
+  if (verification.ok === true) return;
   try {
     await paymentService.recordRejectedCallback({
       ipAddress: req.ip,

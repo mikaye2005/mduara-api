@@ -9,6 +9,7 @@ import { env } from '../config/env';
 import { pool } from '../db/client';
 import { chamaRegistrationService } from '../services/chama-registration.service';
 import { writeAuditEvent } from '../services/audit.service';
+import type { ConstitutionAmendmentInput } from '../services/chama.service';
 import type { CreateChamaParams } from '../shared/business_base';
 import { applicationIdSchema, constitutionAmendSchema, constitutionSetupSchema, createChamaFrontendSchema, createChamaSchema, createChamaWizardSchema, inviteSchema, listApplicationsSchema, listInvitationsSchema, listMembersSchema, reviewApplicationSchema, updateChamaSchema, updateMemberSchema } from '../validation/chama.validation';
 import { publicChamaApplySchema, publicChamaListSchema } from '../validation/public-chama.validation';
@@ -74,7 +75,7 @@ export async function createChama(req: Request, res: Response, next: NextFunctio
         action: 'platform_admin_chama_provisioned',
         actorId: req.user.id,
         actorRole: 'platform_admin',
-        chamaId: payment.chamaId ?? null,
+        chamaId: 'chamaId' in payment ? payment.chamaId : null,
         entityType: 'chama_registration_payment',
         entityId: payment.paymentId,
         ipAddress: req.ip,
@@ -251,7 +252,7 @@ export async function configureChamaRules(req: Request, res: Response, next: Nex
 export async function amendChamaRules(req: Request, res: Response, next: NextFunction) {
   try {
     if (!req.user?.id) throw new UnauthorizedError();
-    const input = constitutionAmendSchema.parse(req.body);
+    const input = constitutionAmendSchema.parse(req.body) as ConstitutionAmendmentInput;
     const data = await chamaService.amendConstitution(req.params.id, req.user.id, input);
     res.json({ data });
   } catch (error) { next(error); }
@@ -565,6 +566,13 @@ export async function applyToChama(req: Request, res: Response, next: NextFuncti
   }
 }
 
+export async function exitChama(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.id) throw new UnauthorizedError();
+    res.json({ data: await chamaService.exitChama(req.params.id, req.user.id, { ipAddress: req.ip, userAgent: req.get('user-agent') ?? null }) });
+  } catch (error) { next(error); }
+}
+
 export default {
   createChama,
   getChamaRegistrationPayment,
@@ -590,4 +598,5 @@ export default {
   getPublicChamaDetail,
   getPublicChamaDetailByJoinCode,
   applyToChama,
+  exitChama,
 };

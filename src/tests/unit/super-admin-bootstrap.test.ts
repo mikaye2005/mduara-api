@@ -18,9 +18,9 @@ test('super admin bootstrap requires an explicit identity and password', () => {
 });
 
 test('super admin bootstrap uses the registration identity contract', () => {
-  assert.throws(
-    () => readSuperAdminBootstrapConfig({ ...validEnvironment, SUPER_ADMIN_PHONE: '0712345678' }),
-    /E\.164/,
+  assert.equal(
+    readSuperAdminBootstrapConfig({ ...validEnvironment, SUPER_ADMIN_PHONE: '0712345678' }).phone,
+    '+254712345678',
   );
 
   assert.deepEqual(readSuperAdminBootstrapConfig(validEnvironment), {

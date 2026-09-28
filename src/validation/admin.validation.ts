@@ -20,12 +20,36 @@ export const adminUserStatusSchema = z.object({
   reason: z.string().trim().min(5).max(500),
 }).strict();
 
+/** Administrative provisioning never accepts a platform-admin flag. */
+export const adminCreateUserSchema = z.object({
+  fullName: z.string().trim().min(2).max(150),
+  phone: z.string().trim()
+    .regex(/^(?:\+254|0)[17]\d{8}$/, 'Enter a Kenyan mobile number, e.g. 0712345678 or +254712345678')
+    .transform((value) => value.startsWith('0') ? `+254${value.slice(1)}` : value),
+  email: z.string().trim().email().transform((value) => value.toLowerCase()),
+  pin: z.string().min(8).max(72).optional(),
+  // Compatibility alias while the admin UI moves to its Phone + PIN labels.
+  password: z.string().min(8).max(72).optional(),
+  nationalId: z.string().trim().min(3).max(64).optional(),
+  reason: z.string().trim().min(5).max(500),
+}).strict().superRefine((value, ctx) => {
+  if (!value.pin && !value.password) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pin'], message: 'PIN is required' });
+  if (value.pin && value.password && value.pin !== value.password) ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pin'], message: 'Provide either pin or password, not conflicting values' });
+}).transform((value) => ({ ...value, password: value.pin ?? value.password! }));
+
 export const adminChamaListSchema = z.object({
   page,
   per_page: perPage,
   status: z.enum(['draft', 'recruiting', 'active', 'inactive', 'completed', 'dissolved', 'archived']).optional(),
   q: z.string().trim().max(120).optional(),
 });
+
+export const adminChamaStatusSchema = z.object({
+  // suspend/restore are the terms used in the management UI. Keep the
+  // original verbs as compatible API aliases.
+  action: z.enum(['suspend', 'disable', 'restore', 'reactivate']),
+  reason: z.string().trim().min(5).max(1000),
+}).strict();
 
 export const adminPaymentListSchema = z.object({
   page,
@@ -64,6 +88,7 @@ export const adminAuditListSchema = z.object({
   category: z.enum(['security', 'financial', 'moderation', 'system']).optional(),
   action: z.string().trim().max(120).optional(),
   actor_id: z.string().uuid().optional(),
+  chama_id: z.string().uuid().optional(),
 });
 
 export const adminIdParamSchema = z.string().uuid();

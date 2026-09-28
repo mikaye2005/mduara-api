@@ -25,6 +25,7 @@ export class UserProfileService {
     if (input.fullName !== undefined) entries.push(['full_name', input.fullName]);
     if (input.nationalId !== undefined) entries.push(['national_id', input.nationalId]);
     if (input.dateOfBirth !== undefined) entries.push(['date_of_birth', input.dateOfBirth]);
+    if (input.avatarUrl !== undefined) entries.push(['avatar_url', input.avatarUrl]);
 
     if (entries.length === 0) {
       throw new BadRequestError('At least one profile field must be provided', undefined, 'PROFILE_UPDATE_EMPTY');

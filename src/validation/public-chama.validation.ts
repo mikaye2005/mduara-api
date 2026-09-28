@@ -30,6 +30,7 @@ export const publicChamaApplySchema = z.object({
   constitution_rule_id: z.string().uuid(),
   accept_constitution: z.boolean(),
   invitation_id: z.string().uuid().optional(),
+  invitation_token: z.string().trim().min(16).max(512).optional(),
 });
 
 export const chamaCycleFieldsSchema = z.object({

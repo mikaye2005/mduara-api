@@ -169,6 +169,28 @@ export class LoanService {
     }, { isolationLevel: 'SERIALIZABLE', maxRetries: 2 }, this.db);
   }
 
+  async get(userId: string, loanId: string) {
+    return withDatabaseTransaction(async (client) => {
+      const loan = await getLoanForUpdate(client, loanId);
+      const membership = await getActiveMembership(client, loan.chama_id, userId);
+      const mayReview = ['chairperson', 'treasurer'].includes(membership.role);
+      if (membership.id !== loan.member_id && !mayReview) {
+        throw new ForbiddenError('Loan details are restricted to the borrower and Chama financial leadership', 'LOAN_ACCESS_FORBIDDEN');
+      }
+      const [guarantors, repayments] = await Promise.all([
+        client.query(`SELECT lg.member_id,lg.guaranteed_amount::text AS guaranteed_amount,lg.approved_at::text AS approved_at FROM loan_guarantors lg WHERE lg.loan_id=$1 ORDER BY lg.created_at`, [loanId]),
+        client.query(`SELECT id,amount::text AS amount,status::text AS status,payment_method,provider_reference,receipt_number,paid_at::text AS paid_at,created_at::text AS created_at FROM loan_repayments WHERE loan_id=$1 ORDER BY created_at DESC`, [loanId]),
+      ]);
+      const repaid = await confirmedRepayments(client, loanId);
+      return {
+        ...serializeLoan(loan),
+        outstandingAmount: (BigInt(loan.total_due) - repaid).toString(),
+        guarantors: guarantors.rows.map((row) => ({ memberId: row.member_id, guaranteedAmount: row.guaranteed_amount, approvedAt: row.approved_at })),
+        repayments: repayments.rows,
+      };
+    }, {}, this.db);
+  }
+
   async getRule(userId: string, chamaId: string) {
     return withDatabaseTransaction(async (client) => {
       await getActiveMembership(client, chamaId, userId);

@@ -20,6 +20,7 @@ type OperationType = 'deposit' | 'payout' | 'transfer';
 
 export interface LedgerEntry {
 	chamaId: string;
+	memberId?: string;
 	account: LedgerAccount;
 	side: LedgerSide;
 	amount: bigint;
@@ -50,6 +51,12 @@ export interface PayoutOperation extends BaseOperation {
 }
 
 export interface MemberPayoutOperation extends BaseOperation {
+	chamaId: string;
+	memberId: string;
+	amount: bigint;
+}
+
+export interface LoanDisbursementOperation extends BaseOperation {
 	chamaId: string;
 	memberId: string;
 	amount: bigint;
@@ -151,6 +158,11 @@ export class LedgerBusinessLogic extends BusinessBase {
 		});
 	}
 
+	async recordLoanDisbursementWithinTransaction(client: PoolClient, operation: LoanDisbursementOperation): Promise<LedgerOperationResult> {
+		assertPositiveAmount(operation.amount);
+		return this.executeWithinTransaction(client, { type: 'payout', reference: operation.reference, initiatedBy: operation.initiatedBy, currency: operation.currency ?? 'KES', metadata: operation.metadata, deltas: new Map([[operation.chamaId, -operation.amount]]), entries: [memberCounterEntry(operation.chamaId, operation.memberId, 'member_loan_principal', 'debit', operation.amount), treasuryEntry(operation.chamaId, 'credit', operation.amount)] });
+	}
+
 	async recordTransfer(operation: TransferOperation): Promise<LedgerOperationResult> {
 		assertPositiveAmount(operation.amount);
 		if (operation.fromChamaId === operation.toChamaId) {
@@ -203,6 +215,20 @@ export class LedgerBusinessLogic extends BusinessBase {
 			};
 		});
 	}
+
+	private async executeWithinTransaction(client: PoolClient, operation: PreparedOperation): Promise<LedgerOperationResult> {
+		validateReference(operation.reference);
+		await client.query('SELECT pg_advisory_xact_lock(hashtextextended($1, 0))', [operation.reference]);
+		const replay = await findExistingOperation(client, operation);
+		if (replay) return replay;
+		const treasuries = await lockTreasuries(client, [...operation.deltas.keys()]);
+		const balances = calculateBalances(treasuries, operation.deltas);
+		const ledgerTransactionId = await insertLedgerTransaction(client, operation);
+		await insertLedgerEntries(client, ledgerTransactionId, operation.entries, operation.currency);
+		await client.query("SELECT set_config('app.ledger_transaction_id', $1, true)", [ledgerTransactionId]);
+		for (const [chamaId, balance] of balances) await client.query('UPDATE chamas SET pooled_amount = $1 WHERE id = $2', [balance.toString(), chamaId]);
+		return { ledgerTransactionId, balances: Object.fromEntries(balances), replayed: false };
+	}
 }
 
 function treasuryEntry(chamaId: string, side: LedgerSide, amount: bigint): LedgerEntry {
@@ -216,6 +242,10 @@ function counterEntry(
 	amount: bigint,
 ): LedgerEntry {
 	return { chamaId, account, side, amount };
+}
+
+function memberCounterEntry(chamaId: string, memberId: string, account: Exclude<LedgerAccount, 'chama_treasury'>, side: LedgerSide, amount: bigint): LedgerEntry {
+	return { chamaId, memberId, account, side, amount };
 }
 
 function assertPositiveAmount(amount: bigint): void {
@@ -282,9 +312,9 @@ async function insertLedgerEntries(
 	for (const entry of entries) {
 		await client.query(
 			`INSERT INTO ledger_entries
-				 (ledger_transaction_id, chama_id, account, side, amount, currency)
-			 VALUES ($1, $2, $3, $4, $5, $6)`,
-			[ledgerTransactionId, entry.chamaId, entry.account, entry.side, entry.amount.toString(), currency],
+			 (ledger_transaction_id, chama_id, member_id, account, side, amount, currency)
+			 VALUES ($1, $2, $3, $4, $5, $6, $7)`,
+			[ledgerTransactionId, entry.chamaId, entry.memberId ?? null, entry.account, entry.side, entry.amount.toString(), currency],
 		);
 	}
 }

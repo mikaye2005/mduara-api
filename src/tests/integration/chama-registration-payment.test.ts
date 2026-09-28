@@ -37,8 +37,7 @@ test('Chama creation waits for a confirmed KSh 3,000 registration payment', { sk
     phoneNumber: '+254700000076',
     creation: {
       name: 'Diani Holiday 2027',
-      type: 'goal_based',
-      goal_code: 'diani',
+      type: 'table_banking',
       contribution_amount: 5000,
       contribution_frequency: 'monthly',
       target_members: 20,
@@ -77,8 +76,7 @@ test('Chama creation waits for a confirmed KSh 3,000 registration payment', { sk
     phoneNumber: '+254700000077',
     creation: {
       name: 'Console Payment Chama',
-      type: 'goal_based',
-      goal_code: 'emergency_fund',
+      type: 'table_banking',
       contribution_amount: 2000,
       contribution_frequency: 'monthly',
       target_members: 10,

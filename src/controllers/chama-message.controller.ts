@@ -16,7 +16,7 @@ export async function createChamaMessage(req: Request, res: Response, next: Next
   try {
     if (!req.user?.id) throw new UnauthorizedError();
     const body = createChamaMessageSchema.parse(req.body);
-    const message = await chamaMessageService.create({ chamaId: req.params.id, userId: req.user.id, ...body });
+    const message = await chamaMessageService.create({ chamaId: req.params.id, userId: req.user.id, body: body.body, parentMessageId: body.parentMessageId, kind: body.kind });
     res.status(201).json({ data: message });
   } catch (error) { next(error); }
 }

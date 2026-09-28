@@ -10,6 +10,8 @@ import {
   adminTicketListSchema,
   adminUserListSchema,
   adminUserStatusSchema,
+  adminCreateUserSchema,
+  adminChamaStatusSchema,
   adminBroadcastSchema,
   adminIdParamSchema,
   adminLoanListSchema,
@@ -31,11 +33,14 @@ function actor(req: Request): string {
 export async function overview(req: Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.overview()});}catch(e){next(e);}}
 export async function revenue(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminRangeSchema.parse(req.query);res.json({data:await adminService.revenue(q.range)});}catch(e){next(e);}}
 export async function listUsers(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminUserListSchema.parse(req.query);const r=await adminService.listUsers({page:q.page,perPage:q.per_page,status:q.status,q:q.q});res.json({data:r.users,meta:r.meta});}catch(e){next(e);}}
+export async function createUser(req:Request,res:Response,next:NextFunction){try{const id=actor(req);const body=adminCreateUserSchema.parse(req.body) as {fullName:string;phone:string;email:string;password:string;nationalId?:string;reason:string};res.status(201).json({data:await adminService.createUser(id,body,{ip:req.ip,userAgent:req.get('user-agent')??null})});}catch(e){next(e);}}
 export async function search(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminSearchSchema.parse(req.query);res.json({data:await adminService.search(q.q,q.limit)});}catch(e){next(e);}}
 export async function getUser(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.getUser(adminIdParamSchema.parse(req.params.userId))});}catch(e){next(e);}}
 export async function moderateUser(req:Request,res:Response,next:NextFunction){try{const id=actor(req);const body=adminUserStatusSchema.parse(req.body) as {action:'suspend'|'reactivate'|'delete';reason:string};res.json({data:await adminService.moderateUser(id,req.params.userId,body,{ip:req.ip,userAgent:req.get('user-agent')??null})});}catch(e){next(e);}}
 export async function listChamas(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminChamaListSchema.parse(req.query);const r=await adminService.listChamas({page:q.page,perPage:q.per_page,status:q.status,q:q.q});res.json({data:r.chamas,meta:r.meta});}catch(e){next(e);}}
 export async function getChama(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.getChama(adminIdParamSchema.parse(req.params.chamaId))});}catch(e){next(e);}}
+export async function managementWorkspace(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.managementWorkspace(adminIdParamSchema.parse(req.params.chamaId))});}catch(e){next(e);}}
+export async function moderateChama(req:Request,res:Response,next:NextFunction){try{const id=actor(req);const body=adminChamaStatusSchema.parse(req.body);res.json({data:await adminService.moderateChama(id,adminIdParamSchema.parse(req.params.chamaId),{action:body.action,reason:body.reason},{ip:req.ip,userAgent:req.get('user-agent')??null})});}catch(e){next(e);}}
 export async function addMembership(req:Request,res:Response,next:NextFunction){try{const id=actor(req);const body=adminMembershipSchema.parse(req.body) as {userId:string;role:'member'|'treasurer'|'secretary'|'chairperson';membershipStatus:'active'|'pending';reason:string};res.status(201).json({data:await adminService.addMembership(id,adminIdParamSchema.parse(req.params.chamaId),body,{ip:req.ip,userAgent:req.get('user-agent')??null})});}catch(e){next(e);}}
 export async function changeRole(req:Request,res:Response,next:NextFunction){try{const id=actor(req);const body=adminRoleChangeSchema.parse(req.body) as {role:'member'|'treasurer'|'secretary'|'chairperson';reason:string};res.json({data:await adminService.changeRole(id,adminIdParamSchema.parse(req.params.chamaId),adminIdParamSchema.parse(req.params.userId),body,{ip:req.ip,userAgent:req.get('user-agent')??null})});}catch(e){next(e);}}
 export async function listPayments(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminPaymentListSchema.parse(req.query);const r=await adminService.listPayments({page:q.page,perPage:q.per_page,status:q.status,from:q.from,to:q.to,q:q.q});res.json({data:r.payments,meta:r.meta});}catch(e){next(e);}}
@@ -53,6 +58,7 @@ export async function broadcast(req:Request,res:Response,next:NextFunction){try{
 export async function listAdministrators(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.listAdministrators()});}catch(e){next(e);}}
 export async function suspiciousActivity(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.suspiciousActivity()});}catch(e){next(e);}}
 export async function systemHealth(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.systemHealth()});}catch(e){next(e);}}
-export async function auditLogs(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminAuditListSchema.parse(req.query);const r=await adminService.auditLogs({page:q.page,perPage:q.per_page,category:q.category,action:q.action,actorId:q.actor_id});res.json({data:r.logs,meta:r.meta});}catch(e){next(e);}}
+export async function listReconciliation(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.listReconciliation()});}catch(e){next(e);}}
+export async function auditLogs(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminAuditListSchema.parse(req.query);const r=await adminService.auditLogs({page:q.page,perPage:q.per_page,category:q.category,action:q.action,actorId:q.actor_id,chamaId:q.chama_id});res.json({data:r.logs,meta:r.meta});}catch(e){next(e);}}
 
-export default {overview,revenue,search,listUsers,getUser,moderateUser,listChamas,getChama,addMembership,changeRole,listPayments,getPayment,listRefunds,listDefaults,listApplications,listLoans,listTickets,getTicket,updateTicket,addTicketComment,listNotifications,broadcast,listAdministrators,suspiciousActivity,systemHealth,auditLogs};
+export default {overview,revenue,search,listUsers,createUser,getUser,moderateUser,listChamas,getChama,managementWorkspace,moderateChama,addMembership,changeRole,listPayments,getPayment,listRefunds,listDefaults,listApplications,listLoans,listTickets,getTicket,updateTicket,addTicketComment,listNotifications,broadcast,listAdministrators,suspiciousActivity,systemHealth,listReconciliation,auditLogs};
