@@ -46,6 +46,7 @@ export async function createChama(req: Request, res: Response, next: NextFunctio
     let founderId = req.user.id;
     let creation: CreateChamaParams;
     let wizardName: string | null = null;
+    let setupPaymentMode: 'mpesa' | 'deferred' | undefined;
     if (wizardPayload.success) {
       if (wizardPayload.data.creationSource === 'platform_admin') {
         if (!req.user.isPlatformAdmin) {
@@ -58,6 +59,7 @@ export async function createChama(req: Request, res: Response, next: NextFunctio
         phoneNumber = req.user.phone;
       }
       wizardName = wizardPayload.data.name;
+      setupPaymentMode = wizardPayload.data.setupPaymentMode;
       creation = toCreateChamaWizardParams(wizardPayload.data);
     } else if (frontendPayload.success) {
       phoneNumber = req.user.phone;
@@ -68,7 +70,16 @@ export async function createChama(req: Request, res: Response, next: NextFunctio
       const { phone_number: _phoneNumber, ...canonicalCreation } = payload;
       creation = canonicalCreation;
     }
-    const payment = await chamaRegistrationService.initiate({ founderId, phoneNumber, creation });
+    const payment = await chamaRegistrationService.initiate({
+      actorId: req.user.id,
+      actorRole: req.user.isPlatformAdmin ? 'platform_admin' : 'member',
+      creation,
+      founderId,
+      ipAddress: req.ip,
+      phoneNumber,
+      setupPaymentMode,
+      userAgent: req.get('user-agent') ?? null,
+    });
     if (wizardPayload.success && wizardPayload.data.creationSource === 'platform_admin') {
       await writeAuditEvent(pool, {
         category: 'moderation',
@@ -76,24 +87,24 @@ export async function createChama(req: Request, res: Response, next: NextFunctio
         actorId: req.user.id,
         actorRole: 'platform_admin',
         chamaId: 'chamaId' in payment ? payment.chamaId : null,
-        entityType: 'chama_registration_payment',
-        entityId: payment.paymentId,
+        entityType: payment.status === 'bypassed' ? 'chama' : 'chama_registration_payment',
+        entityId: payment.status === 'bypassed' ? payment.chamaId : payment.paymentId,
         ipAddress: req.ip,
         userAgent: req.get('user-agent') ?? null,
         payload: { founderId, founderIdentifier: wizardPayload.data.founderIdentifier, paymentStatus: payment.status },
       });
     }
-    const confirmed = payment.status === 'confirmed' && Boolean(payment.chamaId);
-    res.status(confirmed ? 201 : 202).json({
+    const created = (payment.status === 'confirmed' || payment.status === 'bypassed') && Boolean(payment.chamaId);
+    res.status(created ? 201 : 202).json({
       data: {
         ...payment,
-        ...(confirmed ? {
+        ...(created ? {
           chama: {
             id: payment.chamaId,
             name: wizardName ?? creation.name,
             shareLink: 'joinUrl' in payment ? payment.joinUrl : null,
           },
-          registrationPayment: { id: payment.paymentId, required: false },
+          registrationPayment: { id: payment.paymentId, required: false, bypassed: payment.status === 'bypassed' },
           founderMembership: { role: 'chair', status: 'active' },
         } : {
           registrationPayment: { id: payment.paymentId, required: true },

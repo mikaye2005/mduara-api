@@ -3,6 +3,7 @@ import { pool } from '../db/client';
 import { withDatabaseTransaction } from '../db/transaction';
 import { env } from '../config/env';
 import type { CreateChamaParams } from '../shared/business_base';
+import { writeAuditEvent, type AuditActorRole } from './audit.service';
 import { ConflictError, NotFoundError, ServiceUnavailableError, UnprocessableEntityError, BadRequestError } from '../utils/errors';
 import { createStkGateway, type MpesaCallbackPayload, type StkPushGateway } from './payment.service';
 import { chamaService } from './chama.service';
@@ -10,9 +11,14 @@ import { chamaService } from './chama.service';
 const REGISTRATION_FEE = 3000n;
 
 export interface StartChamaRegistrationInput {
+  actorId?: string;
+  actorRole?: AuditActorRole;
   founderId: string;
+  ipAddress?: string;
   phoneNumber: string;
   creation: CreateChamaParams;
+  setupPaymentMode?: 'mpesa' | 'deferred';
+  userAgent?: string;
 }
 
 interface RegistrationPaymentRow extends QueryResultRow {
@@ -36,9 +42,14 @@ export class ChamaRegistrationService {
   constructor(
     private readonly db: Pool = pool,
     private readonly gateway: StkPushGateway = createStkGateway(),
+    private readonly nodeEnvironment: typeof env.NODE_ENV = env.NODE_ENV,
   ) {}
 
   async initiate(input: StartChamaRegistrationInput) {
+    if (input.setupPaymentMode === 'deferred' && this.nodeEnvironment === 'development') {
+      return this.createWithoutRegistrationPayment(input);
+    }
+
     if (env.MPESA_PROVIDER === 'daraja' && !env.MPESA_CALLBACK_URL) {
       throw new ServiceUnavailableError('Chama registration M-Pesa callback URL is not configured', 'CHAMA_REGISTRATION_MPESA_NOT_CONFIGURED');
     }
@@ -85,6 +96,7 @@ export class ChamaRegistrationService {
       if (provider.simulatedCallback) return this.processStkCallback(provider.simulatedCallback);
       return {
         paymentId: prepared.paymentId,
+        chamaId: null,
         checkoutRequestId: provider.checkoutRequestId,
         merchantRequestId: provider.merchantRequestId,
         amount: REGISTRATION_FEE.toString(),
@@ -101,6 +113,47 @@ export class ChamaRegistrationService {
       );
       throw error;
     }
+  }
+
+  private async createWithoutRegistrationPayment(input: StartChamaRegistrationInput) {
+    return withDatabaseTransaction(async (client) => {
+      const chama = await chamaService.createChamaWithinTransaction(client, {
+        ...input.creation,
+        created_by: input.founderId,
+      });
+      await writeAuditEvent(client, {
+        category: 'financial',
+        action: 'chama_registration_payment_bypassed',
+        actorId: input.actorId ?? input.founderId,
+        actorRole: input.actorRole ?? 'member',
+        chamaId: chama.id,
+        entityType: 'chama',
+        entityId: chama.id,
+        ipAddress: input.ipAddress,
+        userAgent: input.userAgent,
+        payload: {
+          amount: REGISTRATION_FEE.toString(),
+          currency: 'KES',
+          environment: 'development',
+          reason: 'mpesa_integration_pending',
+        },
+      });
+      return {
+        paymentId: null,
+        chamaId: chama.id,
+        checkoutRequestId: null,
+        merchantRequestId: null,
+        amount: REGISTRATION_FEE.toString(),
+        currency: 'KES' as const,
+        status: 'bypassed' as const,
+        resultCode: null,
+        resultDescription: 'Setup payment bypassed for development; no payment was initiated.',
+        receiptNumber: null,
+        paidAt: null,
+        joinUrl: `${env.FRONTEND_URL ?? 'https://app.mduara.example.com'}/join/${chama.public_join_code}`,
+        replayed: false,
+      };
+    }, { isolationLevel: 'SERIALIZABLE', maxRetries: 2 }, this.db);
   }
 
   async getStatus(founderId: string, checkoutRequestId: string) {
