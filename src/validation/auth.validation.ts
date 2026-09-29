@@ -3,7 +3,10 @@ import { z } from 'zod';
 const phoneSchema = z
   .string()
   .trim()
-  .regex(/^\+[1-9]\d{7,14}$/, 'Phone number must be in E.164 format, e.g. +254712345678');
+  // Kenyan mobile numbers may be entered as 0712345678/0112345678. Persist
+  // and authenticate them in one canonical E.164 form.
+  .regex(/^(?:\+254|0)[17]\d{8}$/, 'Enter a Kenyan mobile number, e.g. 0712345678 or +254712345678')
+  .transform((value) => value.startsWith('0') ? `+254${value.slice(1)}` : value);
 
 const otpCodeSchema = z
   .string()
@@ -25,10 +28,27 @@ export const registerSchema = z.object({
   password: passwordSchema,
 });
 
+// Phone + PIN is the product-facing contract. Keep the former
+// identifier/password shape as a compatibility path for existing clients.
 export const loginSchema = z.object({
-  identifier: identifierSchema,
-  password: passwordSchema,
-});
+  phone: phoneSchema.optional(),
+  pin: passwordSchema.optional(),
+  identifier: identifierSchema.optional(),
+  password: passwordSchema.optional(),
+}).strict().superRefine((value, ctx) => {
+  if (!value.phone && !value.identifier) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['phone'], message: 'Phone number is required' });
+  }
+  if (!value.pin && !value.password) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pin'], message: 'PIN is required' });
+  }
+  if (value.pin && value.password && value.pin !== value.password) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['pin'], message: 'Provide either pin or password, not conflicting values' });
+  }
+}).transform((value) => ({
+  identifier: value.phone ?? (value.identifier!.match(/^0[17]\d{8}$/) ? `+254${value.identifier!.slice(1)}` : value.identifier!),
+  password: value.pin ?? value.password!,
+}));
 
 export const sendOtpSchema = z.object({
   phone: phoneSchema,

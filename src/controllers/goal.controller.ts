@@ -57,10 +57,7 @@ export async function getGoalMarketplaceMetric(req: Request, res: Response, next
 export async function matchGoalChamas(req: Request, res: Response, next: NextFunction) {
   try {
     const input = goalMatchRequestSchema.parse(req.body);
-    const result = await goalMatchingService.findMatches({
-      ...input,
-      userId: req.user?.id,
-    });
+    const result = await goalMatchingService.findMatches({ userId: req.user?.id, targetAmount: input.targetAmount, contributionCapacity: input.contributionCapacity, contributionFrequency: input.contributionFrequency, durationMonths: input.durationMonths, savingGoalId: input.savingGoalId, goalCode: input.goalCode, location: input.location, preferredVisibility: input.preferredVisibility, invitationId: input.invitationId, limit: input.limit });
     res.json({ data: result });
   } catch (error) {
     next(error);

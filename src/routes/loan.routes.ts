@@ -33,6 +33,7 @@ router.post('/mpesa/b2c/result', asyncHandler(loanController.mpesaDisbursementRe
 router.post('/mpesa/b2c/timeout', asyncHandler(loanController.mpesaDisbursementTimeout));
 
 router.post('/apply', authenticate, validateBody(applyLoanSchema), asyncHandler(loanController.apply));
+router.get('/:id', authenticate, asyncHandler(loanController.get));
 router.post('/:id/guarantors', authenticate, validateBody(nominateGuarantorSchema), asyncHandler(loanController.approveGuarantor));
 router.patch('/:id/approve', authenticate, asyncHandler(loanController.approve));
 router.patch('/:id/reject', authenticate, validateBody(rejectLoanSchema), asyncHandler(loanController.reject));

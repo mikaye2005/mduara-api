@@ -143,6 +143,8 @@ test('BE-10 subscription lifecycle against PostgreSQL', { skip: !databaseUrl, ti
     };
     const confirmed = await service.processStkCallback(payload, paidAt);
     assert.equal(confirmed.replayed, false);
+    assert.ok('subscription' in confirmed);
+    if (!('subscription' in confirmed)) throw new Error('Expected subscription entitlement after a successful payment');
     assert.equal(confirmed.subscription.plan.code, 'premium_monthly');
     assert.equal(confirmed.subscription.accessMode, 'active');
 

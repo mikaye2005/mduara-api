@@ -35,6 +35,7 @@ router.post('/', authenticate, chamaController.createChama);
 // Join/apply always authenticates server-side. Visibility, Constitution and invite
 // rules are resolved again inside the PostgreSQL transaction.
 router.post('/:id/apply', authenticate, chamaController.applyToChama);
+router.post('/:id/exit', authenticate, chamaController.exitChama);
 
 router.get(
   '/:id/reports/financial-statement',

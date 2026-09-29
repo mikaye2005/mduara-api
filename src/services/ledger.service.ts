@@ -83,10 +83,7 @@ export class LedgerService extends LedgerBusinessLogic {
       seen.add(record.reference);
     }
 
-    return this.transaction(async (client) => reconcileWindow(client, params), {
-      isolationLevel: 'REPEATABLE READ',
-      maxRetries: 2,
-    });
+    return this.transaction(async (client) => reconcileWindow(client, params));
   }
 }
 

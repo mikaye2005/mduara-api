@@ -15,6 +15,10 @@ export async function apply(req: Request<unknown, unknown, ApplyLoanInput>, res:
   sendSuccess(res, loan, 201);
 }
 
+export async function get(req: Request<{ id: string }>, res: Response): Promise<void> {
+  sendSuccess(res, await loanService.get(req.user!.id, req.params.id));
+}
+
 export async function getLoanRule(req: Request<{ chamaId: string }>, res: Response): Promise<void> {
   sendSuccess(res, await loanService.getRule(req.user!.id, req.params.chamaId));
 }
@@ -68,7 +72,7 @@ async function assertVerifiedMpesaCallback(req: Request): Promise<void> {
     signature: req.header('x-mduara-signature') ?? req.header('x-callback-signature') ?? undefined,
     payload,
   });
-  if (verification.ok) return;
+  if (verification.ok === true) return;
   try {
     await paymentService.recordRejectedCallback({
       ipAddress: req.ip,

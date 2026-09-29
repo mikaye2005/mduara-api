@@ -6,6 +6,7 @@ export const updateMyProfileSchema = z.object({
   fullName: z.string().trim().min(2).max(120).optional(),
   nationalId: z.string().trim().min(3).max(64).nullable().optional(),
   dateOfBirth: isoDateSchema.nullable().optional(),
+  avatarUrl: z.string().trim().url().nullable().optional(),
 }).strict().superRefine((value, ctx) => {
   if (value.dateOfBirth && value.dateOfBirth > new Date().toISOString().slice(0, 10)) {
     ctx.addIssue({

@@ -1577,7 +1577,7 @@ CREATE UNIQUE INDEX uq_subscription_pending_payment_per_chama
 
 CREATE TABLE support_tickets (
     id UUID PRIMARY KEY DEFAULT gen_random_uuid(),
-    ticket_code TEXT NOT NULL UNIQUE DEFAULT ('MD-' || upper(encode(gen_random_bytes(3), 'hex'))),
+    ticket_code TEXT NOT NULL UNIQUE DEFAULT ('MD-' || upper(substr(md5(random()::text || clock_timestamp()::text), 1, 6))),
     user_id UUID NOT NULL REFERENCES users(id) ON DELETE RESTRICT,
     chama_id UUID REFERENCES chamas(id) ON DELETE SET NULL,
     category support_ticket_category NOT NULL DEFAULT 'account_issue',

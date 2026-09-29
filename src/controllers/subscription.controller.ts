@@ -17,7 +17,11 @@ export async function pay(
   req: Request<Record<string, never>, unknown, SubscriptionPaymentInput>,
   res: Response,
 ): Promise<void> {
-  sendSuccess(res, await subscriptionService.initiatePayment(req.user!.id, req.body), 202);
+  sendSuccess(res, await subscriptionService.initiatePayment(req.user!.id, {
+    chamaId: req.body.chamaId,
+    phoneNumber: req.body.phoneNumber,
+    planCode: req.body.planCode,
+  }), 202);
 }
 
 export async function paymentStatus(req: Request<{ checkoutId: string }>, res: Response): Promise<void> {
@@ -37,7 +41,7 @@ async function assertVerifiedMpesaCallback(req: Request): Promise<void> {
     signature: req.header('x-mduara-signature') ?? req.header('x-callback-signature') ?? undefined,
     payload,
   });
-  if (verification.ok) return;
+  if (verification.ok === true) return;
   try {
     await paymentService.recordRejectedCallback({
       ipAddress: req.ip,

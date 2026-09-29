@@ -42,12 +42,17 @@ export class CredentialService {
   async authenticatePassword(identifier: string, password: string, context: CredentialRequestContext = {}): Promise<AuthenticatedCredentialUser> {
     return withDatabaseTransaction(
       async (client) => {
+        // Older records may contain the Kenyan local representation. New
+        // inputs are normalized at validation, but accept either stored form
+        // while those accounts are migrated naturally on their next update.
+        const localPhone = /^\+254[17]\d{8}$/.test(identifier) ? `0${identifier.slice(4)}` : identifier;
         const result = await client.query<CredentialRow>(
           `SELECT id, phone, pin_hash, status, failed_login_attempts, login_locked_until
            FROM users
-           WHERE phone = $1 OR lower(email) = lower($1)
-           FOR UPDATE`,
-          [identifier],
+           WHERE phone = $1 OR phone = $2 OR lower(email) = lower($1)
+           ORDER BY CASE WHEN phone = $1 THEN 0 WHEN phone = $2 THEN 1 ELSE 2 END
+           LIMIT 1 FOR UPDATE`,
+          [identifier, localPhone],
         );
         const user = result.rows[0];
 

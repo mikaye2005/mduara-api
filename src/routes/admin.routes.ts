@@ -14,10 +14,18 @@ router.get('/overview', adminController.overview);
 router.get('/revenue', adminController.revenue);
 router.get('/search', adminController.search);
 router.get('/users', adminController.listUsers);
+router.post('/users', adminController.createUser);
 router.get('/users/:userId', adminController.getUser);
+router.patch('/users/:userId', adminController.updateUserProfile);
+router.delete('/users/:userId/sessions', adminController.revokeUserSessions);
+router.delete('/users/:userId/sessions/:sessionId', adminController.revokeUserSessions);
 router.patch('/users/:userId/status', adminController.moderateUser);
 router.get('/chamas', adminController.listChamas);
+// Purpose-built detail payload for the Chama Management workspace. This must
+// precede /:chamaId so it is never interpreted as an identifier.
+router.get('/chamas/:chamaId/management', adminController.managementWorkspace);
 router.get('/chamas/:chamaId', adminController.getChama);
+router.patch('/chamas/:chamaId/status', adminController.moderateChama);
 router.post('/chamas/:chamaId/members', adminController.addMembership);
 router.patch('/chamas/:chamaId/members/:userId/role', adminController.changeRole);
 router.get('/payments', adminController.listPayments);
@@ -36,6 +44,7 @@ router.post('/broadcasts', adminController.broadcast);
 router.get('/administrators', adminController.listAdministrators);
 router.get('/suspicious-activity', adminController.suspiciousActivity);
 router.get('/system-health', adminController.systemHealth);
+router.get('/reconciliation', adminController.listReconciliation);
 router.get('/audit-logs', adminController.auditLogs);
 
 export default router;

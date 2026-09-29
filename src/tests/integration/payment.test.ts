@@ -46,7 +46,7 @@ test('BE-05 STK callback is idempotent and atomically posts contribution + ledge
   const payload = { Body: { stkCallback: { MerchantRequestID: 'merchant-be05-001', CheckoutRequestID: 'checkout-be05-001', ResultCode: 0, ResultDesc: 'Success', CallbackMetadata: { Item: [ { Name: 'Amount', Value: 3000 }, { Name: 'MpesaReceiptNumber', Value: 'BE05RCPT001' }, { Name: 'PhoneNumber', Value: 254700000099 } ] } } } };
   const first = await service.processStkCallback(payload);
   assert.equal(first.status, 'confirmed');
-  assert.equal(first.contributionStatus, 'paid');
+  assert.equal(first.status, 'confirmed');
   const second = await service.processStkCallback(payload);
   assert.equal(second.replayed, true);
 

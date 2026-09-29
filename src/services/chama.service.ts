@@ -417,6 +417,22 @@ export class ChamaService extends ChamaBusinessBase {
     });
   }
 
+  async exitChama(chamaId: string, userId: string, context: { ipAddress?: string | null; userAgent?: string | null } = {}) {
+    return this.transaction(async (client) => {
+      const membership = await this.requireActiveMembership(client, chamaId, userId);
+      if (membership.role === 'chairperson') {
+        const chairs = await client.query<{ count: number }>(`SELECT COUNT(*)::int AS count FROM chama_members WHERE chama_id=$1 AND role='chairperson' AND membership_status='active'`, [chamaId]);
+        if (Number(chairs.rows[0]?.count ?? 0) <= 1) throw new ConflictError('Transfer Chairperson responsibility before leaving the Chama', 'CHAMA_EXIT_LAST_CHAIRPERSON');
+      }
+      const obligations = await client.query<{ defaults: number; loans: number }>(`SELECT COUNT(*) FILTER (WHERE cm.commitment_status IN ('default_triggered','forfeited','partial_forfeit'))::int AS defaults,(SELECT COUNT(*)::int FROM loans WHERE member_id=$1 AND status NOT IN ('rejected','cancelled','repaid')) AS loans FROM chama_members cm WHERE cm.id=$1`, [membership.id]);
+      if (Number(obligations.rows[0]?.defaults ?? 0) > 0) throw new ConflictError('Resolve the membership default before leaving the Chama', 'CHAMA_EXIT_DEFAULT_UNRESOLVED');
+      if (Number(obligations.rows[0]?.loans ?? 0) > 0) throw new ConflictError('Settle outstanding loans before leaving the Chama', 'CHAMA_EXIT_LOAN_OUTSTANDING');
+      const exited = (await client.query(`UPDATE chama_members SET membership_status='exited',exit_date=CURRENT_TIMESTAMP,updated_at=CURRENT_TIMESTAMP WHERE id=$1 RETURNING id,chama_id,membership_status::text AS status,exit_date::text AS exit_date`, [membership.id])).rows[0];
+      await client.query(`INSERT INTO audit_logs(category,action,actor_id,actor_role,chama_id,entity_type,entity_id,ip_address,user_agent,payload) VALUES ('moderation','membership_exit',$1,'member',$2,'chama_member',$3,$4::inet,$5,'{}'::jsonb)`, [userId, chamaId, membership.id, context.ipAddress ?? null, context.userAgent ?? null]);
+      return { membershipId: exited.id, chamaId: exited.chama_id, status: exited.status, exitedAt: exited.exit_date };
+    });
+  }
+
   private async requireActiveMembership(queryable: { query: PoolClient['query'] }, chamaId: string, actorId: string) {
     const membership = (await queryable.query(
       `SELECT id, role::text AS role, membership_status::text AS membership_status

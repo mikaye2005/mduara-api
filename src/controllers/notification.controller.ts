@@ -42,7 +42,7 @@ export async function dispatchInternal(req: Request, res: Response, next: NextFu
   try {
     verifyInternalSecret(req);
     const input = dispatchNotificationSchema.parse(req.body);
-    const result = await notificationService.dispatch(input);
+    const result = await notificationService.dispatch({ userIds: input.userIds, template: input.template, chamaId: input.chamaId ?? undefined, channels: input.channels, data: input.data, dedupeKey: input.dedupeKey ?? undefined });
     res.status(202).json({ data: result });
   } catch (error) { next(error); }
 }
