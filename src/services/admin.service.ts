@@ -414,9 +414,9 @@ export class AdminService {
 
   async getUser(userId: string) {
     const user = (await this.db.query<{
-      id:string;full_name:string;phone:string;email:string;status:string;status_reason:string|null;is_email_verified:boolean;
+      id:string;full_name:string;phone:string;email:string;national_id:string|null;status:string;status_reason:string|null;is_email_verified:boolean;
       is_platform_admin:boolean;last_login_at:string|null;created_at:string;updated_at:string;
-    }>(`SELECT id,full_name,phone,email,status::text AS status,status_reason,is_email_verified,is_platform_admin,
+    }>(`SELECT id,full_name,phone,email,national_id,status::text AS status,status_reason,is_email_verified,is_platform_admin,
               last_login_at::text,created_at::text,updated_at::text FROM users WHERE id=$1`,[userId])).rows[0];
     if (!user) throw new NotFoundError('User not found','USER_NOT_FOUND');
     const [memberships,tickets,payments,audit,invitations,applications,commitments,loans,notifications,sessions] = await Promise.all([
@@ -437,8 +437,9 @@ export class AdminService {
       this.db.query(`SELECT id,event_type,channel::text AS channel,title,status::text AS status,sent_at::text,created_at::text FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50`,[userId]),
       this.db.query(`SELECT id,created_at::text,expires_at::text,revoked_at::text FROM refresh_tokens WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50`,[userId]),
     ]);
-    return { id:user.id,fullName:user.full_name,phone:user.phone,email:user.email,status:user.status,statusReason:user.status_reason,
+    return { id:user.id,fullName:user.full_name,phone:user.phone,email:user.email,nationalId:user.national_id,status:user.status,statusReason:user.status_reason,
       isEmailVerified:user.is_email_verified,isPlatformAdmin:user.is_platform_admin,lastLoginAt:iso(user.last_login_at),
+      chamaCount:memberships.rows.filter((membership) => membership.status === 'active').length,
       createdAt:iso(user.created_at),updatedAt:iso(user.updated_at),memberships:memberships.rows,tickets:tickets.rows,payments:payments.rows,auditEvents:audit.rows,
       invitations:invitations.rows,applications:applications.rows,commitments:commitments.rows,loans:loans.rows,notifications:notifications.rows,sessions:sessions.rows };
   }
