@@ -16,6 +16,9 @@ router.get('/search', adminController.search);
 router.get('/users', adminController.listUsers);
 router.post('/users', adminController.createUser);
 router.get('/users/:userId', adminController.getUser);
+router.patch('/users/:userId', adminController.updateUserProfile);
+router.delete('/users/:userId/sessions', adminController.revokeUserSessions);
+router.delete('/users/:userId/sessions/:sessionId', adminController.revokeUserSessions);
 router.patch('/users/:userId/status', adminController.moderateUser);
 router.get('/chamas', adminController.listChamas);
 // Purpose-built detail payload for the Chama Management workspace. This must

@@ -167,6 +167,16 @@ export class AdminService {
     }
   }
 
+  async updateUserProfile(actorId:string,userId:string,input:{fullName?:string;email?:string;nationalId?:string|null;reason:string},context?:{ip?:string|null;userAgent?:string|null}) {
+    const entries: Array<[string, unknown]> = []; if(input.fullName!==undefined)entries.push(['full_name',input.fullName]); if(input.email!==undefined)entries.push(['email',input.email.toLowerCase()]); if(input.nationalId!==undefined)entries.push(['national_id',input.nationalId]);
+    if(!entries.length) throw new ConflictError('No profile fields were supplied','ADMIN_PROFILE_NO_CHANGES');
+    try{return await withDatabaseTransaction(async client=>{const values=entries.map(([,v])=>v);values.push(userId);const row=(await client.query(`UPDATE users SET ${entries.map(([c],i)=>`${c}=$${i+1}`).join(',')},updated_at=CURRENT_TIMESTAMP WHERE id=$${values.length} RETURNING id,full_name,email,phone,national_id,status::text AS status`,values)).rows[0];if(!row)throw new NotFoundError('User not found','USER_NOT_FOUND');await writeAuditEvent(client,{category:'moderation',action:'platform_admin_user_profile_corrected',actorId,actorRole:'platform_admin',entityType:'user',entityId:userId,ipAddress:context?.ip,userAgent:context?.userAgent,payload:{fields:entries.map(([c])=>c),reason:input.reason}});return row;},{isolationLevel:'SERIALIZABLE',maxRetries:2},this.db);}catch(error){if((error as {code?:string}).code==='23505')throw new ConflictError('Email or national ID is already in use','ADMIN_PROFILE_CONFLICT');throw error;}
+  }
+
+  async revokeUserSessions(actorId:string,userId:string,sessionId:string|undefined,reason:string,context?:{ip?:string|null;userAgent?:string|null}) {
+    return withDatabaseTransaction(async client=>{const result=await client.query(`UPDATE refresh_tokens SET revoked_at=CURRENT_TIMESTAMP WHERE user_id=$1 AND revoked_at IS NULL ${sessionId?'AND id=$2':''}` ,sessionId?[userId,sessionId]:[userId]);if(sessionId&&!result.rowCount)throw new NotFoundError('Active session not found','SESSION_NOT_FOUND');await client.query(`UPDATE users SET session_version=session_version+1,updated_at=CURRENT_TIMESTAMP WHERE id=$1`,[userId]);await writeAuditEvent(client,{category:'security',action:sessionId?'platform_admin_session_revoked':'platform_admin_all_sessions_revoked',actorId,actorRole:'platform_admin',entityType:'user',entityId:userId,ipAddress:context?.ip,userAgent:context?.userAgent,payload:{sessionId:sessionId??null,reason,count:result.rowCount}});return {revoked:result.rowCount??0};},{isolationLevel:'READ COMMITTED'},this.db);
+  }
+
   async moderateUser(actorId: string, userId: string, input: { action: 'suspend' | 'reactivate' | 'delete'; reason: string }, context?: { ip?: string | null; userAgent?: string | null }) {
     if (actorId === userId) throw new ForbiddenError('Platform administrators cannot moderate their own account through this endpoint', 'ADMIN_SELF_MODERATION_FORBIDDEN');
     return withDatabaseTransaction(async (client) => {
@@ -409,7 +419,7 @@ export class AdminService {
     }>(`SELECT id,full_name,phone,email,status::text AS status,status_reason,is_email_verified,is_platform_admin,
               last_login_at::text,created_at::text,updated_at::text FROM users WHERE id=$1`,[userId])).rows[0];
     if (!user) throw new NotFoundError('User not found','USER_NOT_FOUND');
-    const [memberships,tickets,payments,audit] = await Promise.all([
+    const [memberships,tickets,payments,audit,invitations,applications,commitments,loans,notifications,sessions] = await Promise.all([
       this.db.query(`SELECT cm.id,cm.chama_id,c.name AS chama_name,cm.role::text AS role,
         cm.membership_status::text AS status,cm.commitment_status::text AS commitment_status,cm.joined_at::text
         FROM chama_members cm JOIN chamas c ON c.id=cm.chama_id WHERE cm.user_id=$1 ORDER BY cm.joined_at DESC`,[userId]),
@@ -419,10 +429,18 @@ export class AdminService {
         FROM payment_provider_logs WHERE user_id=$1 ORDER BY created_at DESC LIMIT 20`,[userId]),
       this.db.query(`SELECT id,category::text AS category,action,actor_id,payload,created_at::text FROM audit_logs
         WHERE entity_id=$1 OR actor_id=$1 ORDER BY created_at DESC LIMIT 20`,[userId]),
+      this.db.query(`SELECT ci.id,c.name AS chama_name,ci.requested_role::text AS role,ci.status::text AS status,ci.sent_at::text,ci.expires_at::text,ci.created_at::text
+        FROM chama_invitations ci JOIN chamas c ON c.id=ci.chama_id WHERE ci.applicant_id=$1 OR ci.recipient_phone=(SELECT phone FROM users WHERE id=$1) ORDER BY ci.created_at DESC`,[userId]),
+      this.db.query(`SELECT ca.id,c.name AS chama_name,ca.status::text AS status,ca.rejection_reason,ca.created_at::text,ca.reviewed_at::text FROM chama_applications ca JOIN chamas c ON c.id=ca.chama_id WHERE ca.user_id=$1 ORDER BY ca.created_at DESC`,[userId]),
+      this.db.query(`SELECT cd.id,c.name AS chama_name,cd.amount::text,cd.state::text AS status,cd.eligible_for_refund_at::text,cd.refunded_at::text FROM commitment_deposits cd JOIN chamas c ON c.id=cd.chama_id WHERE cd.user_id=$1 ORDER BY cd.updated_at DESC`,[userId]),
+      this.db.query(`SELECT l.id,c.name AS chama_name,l.principal_amount::text,l.total_due::text,l.status::text AS status,l.due_date::text FROM loans l JOIN chama_members cm ON cm.id=l.member_id JOIN chamas c ON c.id=l.chama_id WHERE cm.user_id=$1 ORDER BY l.application_date DESC`,[userId]),
+      this.db.query(`SELECT id,event_type,channel::text AS channel,title,status::text AS status,sent_at::text,created_at::text FROM notifications WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50`,[userId]),
+      this.db.query(`SELECT id,created_at::text,expires_at::text,revoked_at::text FROM refresh_tokens WHERE user_id=$1 ORDER BY created_at DESC LIMIT 50`,[userId]),
     ]);
     return { id:user.id,fullName:user.full_name,phone:user.phone,email:user.email,status:user.status,statusReason:user.status_reason,
       isEmailVerified:user.is_email_verified,isPlatformAdmin:user.is_platform_admin,lastLoginAt:iso(user.last_login_at),
-      createdAt:iso(user.created_at),updatedAt:iso(user.updated_at),memberships:memberships.rows,tickets:tickets.rows,payments:payments.rows,auditEvents:audit.rows };
+      createdAt:iso(user.created_at),updatedAt:iso(user.updated_at),memberships:memberships.rows,tickets:tickets.rows,payments:payments.rows,auditEvents:audit.rows,
+      invitations:invitations.rows,applications:applications.rows,commitments:commitments.rows,loans:loans.rows,notifications:notifications.rows,sessions:sessions.rows };
   }
 
   async getChama(chamaId: string) {

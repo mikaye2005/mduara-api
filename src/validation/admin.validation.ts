@@ -19,6 +19,8 @@ export const adminUserStatusSchema = z.object({
   action: z.enum(['suspend', 'reactivate', 'delete']),
   reason: z.string().trim().min(5).max(500),
 }).strict();
+export const adminUserProfileSchema = z.object({ fullName: z.string().trim().min(2).max(150).optional(), email: z.string().trim().email().optional(), nationalId: z.string().trim().min(3).max(64).nullable().optional(), reason: z.string().trim().min(5).max(500) }).strict();
+export const adminReasonSchema = z.object({ reason: z.string().trim().min(5).max(500) }).strict();
 
 /** Administrative provisioning never accepts a platform-admin flag. */
 export const adminCreateUserSchema = z.object({

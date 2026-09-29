@@ -10,6 +10,7 @@ import {
   adminTicketListSchema,
   adminUserListSchema,
   adminUserStatusSchema,
+  adminUserProfileSchema, adminReasonSchema,
   adminCreateUserSchema,
   adminChamaStatusSchema,
   adminBroadcastSchema,
@@ -36,6 +37,8 @@ export async function listUsers(req:Request,res:Response,next:NextFunction){try{
 export async function createUser(req:Request,res:Response,next:NextFunction){try{const id=actor(req);const body=adminCreateUserSchema.parse(req.body) as {fullName:string;phone:string;email:string;password:string;nationalId?:string;reason:string};res.status(201).json({data:await adminService.createUser(id,body,{ip:req.ip,userAgent:req.get('user-agent')??null})});}catch(e){next(e);}}
 export async function search(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminSearchSchema.parse(req.query);res.json({data:await adminService.search(q.q,q.limit)});}catch(e){next(e);}}
 export async function getUser(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.getUser(adminIdParamSchema.parse(req.params.userId))});}catch(e){next(e);}}
+export async function updateUserProfile(req:Request,res:Response,next:NextFunction){try{const id=actor(req);const body=adminUserProfileSchema.parse(req.body) as {fullName?:string;email?:string;nationalId?:string|null;reason:string};res.json({data:await adminService.updateUserProfile(id,adminIdParamSchema.parse(req.params.userId),body,{ip:req.ip,userAgent:req.get('user-agent')??null})});}catch(e){next(e);}}
+export async function revokeUserSessions(req:Request,res:Response,next:NextFunction){try{const id=actor(req);const body=adminReasonSchema.parse(req.body);res.json({data:await adminService.revokeUserSessions(id,adminIdParamSchema.parse(req.params.userId),req.params.sessionId,body.reason,{ip:req.ip,userAgent:req.get('user-agent')??null})});}catch(e){next(e);}}
 export async function moderateUser(req:Request,res:Response,next:NextFunction){try{const id=actor(req);const body=adminUserStatusSchema.parse(req.body) as {action:'suspend'|'reactivate'|'delete';reason:string};res.json({data:await adminService.moderateUser(id,req.params.userId,body,{ip:req.ip,userAgent:req.get('user-agent')??null})});}catch(e){next(e);}}
 export async function listChamas(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminChamaListSchema.parse(req.query);const r=await adminService.listChamas({page:q.page,perPage:q.per_page,status:q.status,q:q.q});res.json({data:r.chamas,meta:r.meta});}catch(e){next(e);}}
 export async function getChama(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.getChama(adminIdParamSchema.parse(req.params.chamaId))});}catch(e){next(e);}}
@@ -61,4 +64,4 @@ export async function systemHealth(req:Request,res:Response,next:NextFunction){t
 export async function listReconciliation(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.listReconciliation()});}catch(e){next(e);}}
 export async function auditLogs(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminAuditListSchema.parse(req.query);const r=await adminService.auditLogs({page:q.page,perPage:q.per_page,category:q.category,action:q.action,actorId:q.actor_id,chamaId:q.chama_id});res.json({data:r.logs,meta:r.meta});}catch(e){next(e);}}
 
-export default {overview,revenue,search,listUsers,createUser,getUser,moderateUser,listChamas,getChama,managementWorkspace,moderateChama,addMembership,changeRole,listPayments,getPayment,listRefunds,listDefaults,listApplications,listLoans,listTickets,getTicket,updateTicket,addTicketComment,listNotifications,broadcast,listAdministrators,suspiciousActivity,systemHealth,listReconciliation,auditLogs};
+export default {overview,revenue,search,listUsers,createUser,getUser,updateUserProfile,revokeUserSessions,moderateUser,listChamas,getChama,managementWorkspace,moderateChama,addMembership,changeRole,listPayments,getPayment,listRefunds,listDefaults,listApplications,listLoans,listTickets,getTicket,updateTicket,addTicketComment,listNotifications,broadcast,listAdministrators,suspiciousActivity,systemHealth,listReconciliation,auditLogs};
