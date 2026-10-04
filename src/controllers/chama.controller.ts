@@ -86,7 +86,7 @@ export async function createChama(req: Request, res: Response, next: NextFunctio
         action: 'platform_admin_chama_provisioned',
         actorId: req.user.id,
         actorRole: 'platform_admin',
-        chamaId: 'chamaId' in payment ? payment.chamaId : null,
+        chamaId: payment.chamaId ?? null,
         entityType: payment.status === 'bypassed' ? 'chama' : 'chama_registration_payment',
         entityId: payment.status === 'bypassed' ? payment.chamaId : payment.paymentId,
         ipAddress: req.ip,
