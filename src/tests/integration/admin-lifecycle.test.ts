@@ -5,6 +5,8 @@ import { Pool } from 'pg';
 import migrate from 'node-pg-migrate';
 import type { NextFunction, Request, Response } from 'express';
 import { AdminService } from '../../services/admin.service';
+import { ChamaMessageService } from '../../services/chama-message.service';
+import { NotificationService } from '../../services/notification.service';
 import { runTrackedBackgroundJob } from '../../services/background-job.service';
 import { createAdminAccessAudit } from '../../middlewares/admin.middleware';
 
@@ -61,6 +63,21 @@ test('BE-21 platform administration, telemetry and audit boundaries', { skip: !d
     assert.ok(overview.support.open_tickets >= 1);
   });
 
+  await t.test('dashboard and command center expose live graph and queue contracts', async () => {
+    const dashboard = await service.dashboard('30d', new Date());
+    assert.equal(dashboard.range, '30d');
+    assert.ok(dashboard.metrics.totalUsers.value >= 4);
+    assert.ok(dashboard.userGrowth.length > 0);
+    assert.ok(dashboard.chamaGrowth.length > 0);
+    assert.ok(dashboard.chamaStatuses.some((item) => item.label === 'Active' && item.value >= 1));
+    assert.equal(dashboard.metrics.paymentSuccessRate.unit, 'percent');
+
+    const commandCenter = await service.commandCenter(new Date());
+    assert.ok(commandCenter.incidents.some((item) => item.id === `ticket:${ticket}`));
+    assert.ok(commandCenter.services.some((item) => item.name === 'API'));
+    assert.ok(commandCenter.lastUpdated);
+  });
+
   await t.test('user moderation revokes sessions, audits the transition, and cannot target admins/self', async () => {
     const before = (await db.query<{ session_version: number }>('SELECT session_version FROM users WHERE id=$1',[member])).rows[0].session_version;
     const suspended = await service.moderateUser(admin, member, { action: 'suspend', reason: 'Confirmed account security review' });
@@ -109,6 +126,35 @@ test('BE-21 platform administration, telemetry and audit boundaries', { skip: !d
     });
     assert.ok(Number(queued.recipientCount) >= 2);
     assert.equal(queued.notificationCount, Number(queued.recipientCount));
+
+    const adminNotice = (await db.query<{status:string;sent_at:string|null}>(
+      `SELECT status::text AS status,sent_at::text FROM notifications
+        WHERE user_id=$1 AND event_type='platform_broadcast' AND channel='in_app'
+        ORDER BY created_at DESC LIMIT 1`, [admin],
+    )).rows[0];
+    assert.equal(adminNotice.status, 'sent');
+    assert.ok(adminNotice.sent_at);
+  });
+
+  await t.test('leadership contact appears in both the Chair workspace and in-app feed', async () => {
+    const sent = await service.contactChamaLeadership(admin, chama, {
+      subject: 'Platform account follow-up',
+      body: 'Please review the Chama account details and reply through the workspace.',
+      reason: 'Follow up with active Chama leadership',
+      channels: ['in_app'],
+    });
+    assert.equal(sent.status, 'sent');
+    assert.ok(sent.messageId);
+
+    const messages = await new ChamaMessageService(db).list(chama, memberTwo, 1, 25);
+    const message = messages.messages.find((item) => item.id === sent.messageId);
+    assert.equal(message?.kind, 'system');
+    assert.match(message?.body ?? '', /Platform account follow-up/);
+
+    const feed = await new NotificationService(db).getFeed(memberTwo, { page: 1, perPage: 25 });
+    const notice = feed.notifications.find((item) => item.eventType === 'platform_admin_leadership_message');
+    assert.equal(notice?.status, 'sent');
+    assert.equal(notice?.payload.messageId, sent.messageId);
   });
 
   await t.test('revenue reads the platform revenue ledger rather than provider rows', async () => {

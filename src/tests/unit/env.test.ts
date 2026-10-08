@@ -90,3 +90,11 @@ test('development console payments are explicit and forbidden in production', ()
     'daraja',
   );
 });
+
+test('commitment fee bypass is explicit and forbidden in production', () => {
+  assert.equal(loadEnv({ ...validBase, DEMO_BYPASS_COMMITMENT_FEE: 'true' }).DEMO_BYPASS_COMMITMENT_FEE, true);
+  assert.throws(
+    () => loadEnv({ ...validBase, NODE_ENV: 'production', DEMO_BYPASS_COMMITMENT_FEE: 'true' }),
+    /DEMO_BYPASS_COMMITMENT_FEE/,
+  );
+});

@@ -537,7 +537,7 @@ export class PublicChamaService {
         `INSERT INTO commitment_deposits
            (chama_id, user_id, membership_id, application_id, chama_rule_id, amount,
             state, last_transition_source, last_transition_reference)
-         VALUES ($1, $2, $3, $4, $5, $6, 'applied', 'join_flow', $4::text)
+         VALUES ($1, $2, $3, $4::uuid, $5, $6, 'applied', 'join_flow', ($4::uuid)::text)
          RETURNING id, state::text AS state`,
         [input.chamaId, input.userId, membership.id, application.id, rule.id, rule.commitment_amount],
       )).rows[0];

@@ -42,10 +42,15 @@ export async function createChama(req: Request, res: Response, next: NextFunctio
 		if (!req.user?.id) throw new UnauthorizedError();
     const wizardPayload = createChamaWizardSchema.safeParse(req.body);
     const frontendPayload = createChamaFrontendSchema.safeParse(req.body);
+    const isWizardRequest = typeof req.body === 'object' && req.body !== null
+      && ('creationSource' in req.body || 'constitution' in req.body);
     let phoneNumber: string;
     let founderId = req.user.id;
     let creation: CreateChamaParams;
     let wizardName: string | null = null;
+    if (isWizardRequest && !wizardPayload.success) {
+      throw wizardPayload.error;
+    }
     if (wizardPayload.success) {
       if (wizardPayload.data.creationSource === 'platform_admin') {
         if (!req.user.isPlatformAdmin) {
@@ -138,12 +143,15 @@ function toCreateChamaWizardParams(payload: ReturnType<typeof createChamaWizardS
     merry_go_round: 'merry_go_round',
     investment: 'investment',
   } as const;
+  const contributionFrequency = payload.contributionFrequency === 'custom'
+    ? `every_${payload.contributionInterval}_${payload.contributionIntervalUnit}${payload.contributionInterval === 1 ? '' : 's'}`
+    : payload.contributionFrequency;
   return {
     name: payload.name,
     description: payload.description ?? payload.purpose,
     type: typeMap[payload.type],
     contribution_amount: payload.contributionAmount,
-    contribution_frequency: payload.contributionFrequency,
+    contribution_frequency: contributionFrequency,
     target_amount: payload.targetAmount,
     visibility: payload.recruitmentMode,
     goal_code: payload.type === 'goal_based' ? payload.goalCode : null,
@@ -157,7 +165,7 @@ function toCreateChamaWizardParams(payload: ReturnType<typeof createChamaWizardS
       template_code: templateMap[payload.type],
       purpose_goal: sections.purposeAndGoal || payload.purpose,
       contribution_amount: payload.contributionAmount,
-      contribution_frequency: payload.contributionFrequency,
+      contribution_frequency: contributionFrequency,
       exit_withdrawal_policy: { text: sections.exitAndWithdrawal },
       payout_policy: {
         text: sections.payoutRules,

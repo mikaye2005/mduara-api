@@ -228,7 +228,7 @@ export class TrustScoreService {
   }
 
   async refreshMembershipScore(client: PoolClient, membershipId: string): Promise<void> {
-    const formula = await this.getActiveFormulaForUpdate(client, 'member-v1', 'member');
+    const formula = await this.getActiveFormulaForSubjectUpdate(client, 'member');
     if (!formula) return;
 
     const inputs = (await client.query<MemberScoreInputs>(
@@ -303,6 +303,21 @@ export class TrustScoreService {
        WHERE id = $1 AND subject_type = $2 AND status = 'active'
        FOR SHARE`,
       [formulaVersionId, subjectType],
+    );
+    return result.rows[0] ?? null;
+  }
+
+  private async getActiveFormulaForSubjectUpdate(
+    client: PoolClient,
+    subjectType: 'member' | 'chama',
+  ): Promise<FormulaRow | null> {
+    const result = await client.query<FormulaRow>(
+      `SELECT id, subject_type::text AS subject_type, version, public_description
+       FROM trust_score_formula_versions
+       WHERE subject_type = $1 AND status = 'active'
+       LIMIT 1
+       FOR SHARE`,
+      [subjectType],
     );
     return result.rows[0] ?? null;
   }

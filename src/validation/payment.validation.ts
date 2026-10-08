@@ -7,3 +7,9 @@ export const stkPushSchema = z.object({
 });
 
 export const checkoutIdSchema = z.string().trim().min(5).max(200);
+
+export const simulateContributionSchema = z.object({
+  chamaId: z.string().uuid(),
+  amount: z.union([z.string().regex(/^\d+$/), z.number().int().positive()]).transform(String).optional(),
+  periodLabel: z.string().trim().min(1).max(100).optional(),
+}).strict();

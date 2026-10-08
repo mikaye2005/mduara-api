@@ -7,12 +7,14 @@ import {
   adminCommitmentListSchema,
   adminPaymentListSchema,
   adminRangeSchema,
+  adminDashboardRangeSchema,
   adminTicketListSchema,
   adminUserListSchema,
   adminUserStatusSchema,
   adminUserProfileSchema, adminReasonSchema,
   adminCreateUserSchema,
   adminChamaStatusSchema,
+  adminChamaLeadershipMessageSchema,
   adminBroadcastSchema,
   adminIdParamSchema,
   adminLoanListSchema,
@@ -32,6 +34,8 @@ function actor(req: Request): string {
 }
 
 export async function overview(req: Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.overview()});}catch(e){next(e);}}
+export async function dashboard(req: Request,res:Response,next:NextFunction){try{actor(req);const q=adminDashboardRangeSchema.parse(req.query);res.json({data:await adminService.dashboard(q.range)});}catch(e){next(e);}}
+export async function commandCenter(req: Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.commandCenter()});}catch(e){next(e);}}
 export async function revenue(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminRangeSchema.parse(req.query);res.json({data:await adminService.revenue(q.range)});}catch(e){next(e);}}
 export async function listUsers(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminUserListSchema.parse(req.query);const r=await adminService.listUsers({page:q.page,perPage:q.per_page,status:q.status,q:q.q});res.json({data:r.users,meta:r.meta});}catch(e){next(e);}}
 export async function createUser(req:Request,res:Response,next:NextFunction){try{const id=actor(req);const body=adminCreateUserSchema.parse(req.body) as {fullName:string;phone:string;email:string;password:string;nationalId?:string;reason:string};res.status(201).json({data:await adminService.createUser(id,body,{ip:req.ip,userAgent:req.get('user-agent')??null})});}catch(e){next(e);}}
@@ -58,10 +62,11 @@ export async function addTicketComment(req:Request,res:Response,next:NextFunctio
 export async function listLoans(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminLoanListSchema.parse(req.query);const r=await adminService.listLoans({page:q.page,perPage:q.per_page,status:q.status,q:q.q});res.json({data:r.loans,meta:r.meta});}catch(e){next(e);}}
 export async function listNotifications(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminNotificationListSchema.parse(req.query);const r=await adminService.listNotifications({page:q.page,perPage:q.per_page,status:q.status,channel:q.channel});res.json({data:r.notifications,meta:r.meta});}catch(e){next(e);}}
 export async function broadcast(req:Request,res:Response,next:NextFunction){try{const id=actor(req);const body=adminBroadcastSchema.parse(req.body) as {audience:'all_active_users'|'platform_admins'|'chama';chamaId?:string;channels:('in_app'|'sms'|'email'|'push')[];title:string;body:string;reason:string};res.status(202).json({data:await adminService.broadcast(id,body,{ip:req.ip,userAgent:req.get('user-agent')??null})});}catch(e){next(e);}}
+export async function contactChamaLeadership(req:Request,res:Response,next:NextFunction){try{const id=actor(req);const chamaId=adminIdParamSchema.parse(req.params.chamaId);const body=adminChamaLeadershipMessageSchema.parse(req.body) as {subject:string;body:string;reason:string;channels:('in_app'|'sms'|'email'|'push')[]};res.status(202).json({data:await adminService.contactChamaLeadership(id,chamaId,body,{ip:req.ip,userAgent:req.get('user-agent')??null})});}catch(e){next(e);}}
 export async function listAdministrators(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.listAdministrators()});}catch(e){next(e);}}
 export async function suspiciousActivity(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.suspiciousActivity()});}catch(e){next(e);}}
 export async function systemHealth(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.systemHealth()});}catch(e){next(e);}}
 export async function listReconciliation(req:Request,res:Response,next:NextFunction){try{actor(req);res.json({data:await adminService.listReconciliation()});}catch(e){next(e);}}
 export async function auditLogs(req:Request,res:Response,next:NextFunction){try{actor(req);const q=adminAuditListSchema.parse(req.query);const r=await adminService.auditLogs({page:q.page,perPage:q.per_page,category:q.category,action:q.action,actorId:q.actor_id,chamaId:q.chama_id});res.json({data:r.logs,meta:r.meta});}catch(e){next(e);}}
 
-export default {overview,revenue,search,listUsers,createUser,getUser,updateUserProfile,revokeUserSessions,moderateUser,listChamas,getChama,managementWorkspace,moderateChama,addMembership,changeRole,listPayments,getPayment,listRefunds,listDefaults,listApplications,listLoans,listTickets,getTicket,updateTicket,addTicketComment,listNotifications,broadcast,listAdministrators,suspiciousActivity,systemHealth,listReconciliation,auditLogs};
+export default {overview,dashboard,commandCenter,revenue,search,listUsers,createUser,getUser,updateUserProfile,revokeUserSessions,moderateUser,listChamas,getChama,managementWorkspace,moderateChama,addMembership,changeRole,contactChamaLeadership,listPayments,getPayment,listRefunds,listDefaults,listApplications,listLoans,listTickets,getTicket,updateTicket,addTicketComment,listNotifications,broadcast,listAdministrators,suspiciousActivity,systemHealth,listReconciliation,auditLogs};

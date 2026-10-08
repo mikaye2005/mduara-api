@@ -38,6 +38,8 @@ Do not use rollback as a production data-migration strategy. Production changes 
 
 ## Authentication contract
 
+For non-production demonstrations without M-Pesa, set `DEMO_BYPASS_COMMITMENT_FEE=true`. New application approvals then activate membership immediately without recording a fake payment. Run `npm run demo:bypass-commitments` once to activate existing `commitment_pending` approvals. Startup rejects this flag in production.
+
 M-Duara has one canonical primary sign-in model: **verified phone number + security PIN**. Email remains profile/contact data; it is not a competing primary credential. Password login and password-reset endpoints are not part of the Phase 1 contract.
 
 - `POST /api/v1/auth/register` accepts `fullName`, E.164 `phone`, `email`, and a 4–6 digit `pin`, stores only a bcrypt hash, creates a pending account, and sends a registration OTP.
@@ -572,6 +574,7 @@ BE-05 completes the contribution-collection runtime around the existing `payment
 Endpoints:
 
 - `POST /api/v1/payments/stk-push` — authenticated. Body: `{ contributionId, amount, phoneNumber }`. The contribution must belong to the signed-in user's active Chama membership and the amount cannot exceed its remaining unpaid balance.
+- `POST /api/v1/payments/demo/contributions` — development-only contribution simulation when `MPESA_PROVIDER=console`. Body: `{ chamaId, amount?, periodLabel? }`. It creates/reuses the signed-in active member's period obligation and confirms it through the normal provider callback, receipt, balanced ledger, pooled-balance and trust-score flow. It is unavailable in production.
 - `GET /api/v1/payments/status/:checkoutId` — authenticated, owner-scoped payment polling.
 - `POST /api/v1/payments/mpesa/callback` — public provider callback. `/api/v1/payments/callback` remains a compatibility alias for the original tracker wording.
 
@@ -811,6 +814,8 @@ Every request that enters the admin router first writes an immutable `platform_a
 Read APIs:
 
 - `GET /api/v1/admin/overview` — live user/Chama/application/support counts plus confirmed payment volume for the current Nairobi business day.
+- `GET /api/v1/admin/dashboard?range=30d` — the complete Super Admin dashboard read model: period metrics, comparison deltas, cumulative user/active-Chama trends, all Chama status counts, and time-bucketed provider payment outcomes. Supported ranges are `7d`, `30d`, `90d`, and `12m`.
+- `GET /api/v1/admin/command-center` — one live operational response containing payment/support/risk incidents, recent non-access audit events, service status, and the refresh timestamp.
 - `GET /api/v1/admin/revenue?range=1m|3m|6m|1y|all` — time-bucketed platform revenue from the canonical `platform_fee_revenue` ledger account. Subscription revenue is separated using the immutable ledger transaction metadata written by BE-10; provider/payment tables are not independently summed as accounting revenue.
 - `GET /api/v1/admin/users` — paginated/searchable identity status, safe active-Chama count and office contexts.
 - `GET /api/v1/admin/search?q=...` — bounded platform search across users, Chamas, provider payments and support tickets.

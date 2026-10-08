@@ -1,6 +1,6 @@
 import type { NextFunction, Request, Response } from 'express';
 import { paymentService, verifyMpesaCallbackRequest, type MpesaCallbackPayload } from '../services/payment.service';
-import { checkoutIdSchema, stkPushSchema } from '../validation/payment.validation';
+import { checkoutIdSchema, simulateContributionSchema, stkPushSchema } from '../validation/payment.validation';
 import { BadRequestError, UnauthorizedError } from '../utils/errors';
 
 export async function initiateStkPush(req: Request, res: Response, next: NextFunction) {
@@ -26,6 +26,18 @@ export async function getPaymentStatus(req: Request, res: Response, next: NextFu
   } catch (error) { next(error); }
 }
 
+export async function simulateContribution(req: Request, res: Response, next: NextFunction) {
+  try {
+    if (!req.user?.id) throw new UnauthorizedError();
+    const input=simulateContributionSchema.parse(req.body);
+    const result=await paymentService.simulateContribution({
+      userId:req.user.id,chamaId:input.chamaId,
+      amount:input.amount===undefined?undefined:BigInt(input.amount),periodLabel:input.periodLabel,
+    });
+    res.status(201).json({data:result});
+  } catch(error){next(error);}
+}
+
 export async function mpesaCallback(req: Request, res: Response, next: NextFunction) {
   const payload = req.body as MpesaCallbackPayload;
   const verification = verifyMpesaCallbackRequest({
@@ -44,4 +56,4 @@ export async function mpesaCallback(req: Request, res: Response, next: NextFunct
   } catch (error) { next(error); }
 }
 
-export default { initiateStkPush, getPaymentStatus, mpesaCallback };
+export default { initiateStkPush, getPaymentStatus, simulateContribution, mpesaCallback };

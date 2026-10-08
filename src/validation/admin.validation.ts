@@ -8,6 +8,10 @@ export const adminRangeSchema = z.object({
   range: z.enum(['1m', '3m', '6m', '1y', 'all']).default('6m'),
 });
 
+export const adminDashboardRangeSchema = z.object({
+  range: z.enum(['7d', '30d', '90d', '12m']).default('30d'),
+});
+
 export const adminUserListSchema = z.object({
   page,
   per_page: perPage,
@@ -155,4 +159,12 @@ export const adminBroadcastSchema = z.object({
   }
 });
 
+export const adminChamaLeadershipMessageSchema = z.object({
+  subject: z.string().trim().min(3).max(160),
+  body: z.string().trim().min(5).max(5000),
+  reason: z.string().trim().min(5).max(1000),
+  channels: z.array(z.enum(['in_app', 'sms', 'email', 'push'])).min(1).max(4).default(['in_app']),
+}).strict();
+
 export type AdminRange = z.infer<typeof adminRangeSchema>['range'];
+export type AdminDashboardRange = z.infer<typeof adminDashboardRangeSchema>['range'];

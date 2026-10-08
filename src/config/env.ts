@@ -98,6 +98,7 @@ const envSchema = z.object({
 
   FRONTEND_URL: optionalEnv(z.string()),
   CHAMA_MAX_MEMBERS: z.coerce.number().int().positive().default(500),
+  DEMO_BYPASS_COMMITMENT_FEE: z.enum(['true', 'false']).default('false').transform((value) => value === 'true'),
 
   MPESA_CONSUMER_KEY: optionalEnv(z.string()),
   MPESA_CONSUMER_SECRET: optionalEnv(z.string()),
@@ -164,6 +165,9 @@ export function loadEnv(source: NodeJS.ProcessEnv = process.env) {
   }
   if (parsed.data.NODE_ENV === 'production' && parsed.data.MPESA_PROVIDER === 'console') {
     throw new Error('MPESA_PROVIDER=console is development-only and cannot be used in production.');
+  }
+  if (parsed.data.NODE_ENV === 'production' && parsed.data.DEMO_BYPASS_COMMITMENT_FEE) {
+    throw new Error('DEMO_BYPASS_COMMITMENT_FEE=true is development-only and cannot be used in production.');
   }
 
   return {

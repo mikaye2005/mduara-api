@@ -3,6 +3,7 @@ import { pool } from '../db/client';
 import { withDatabaseTransaction } from '../db/transaction';
 import { ConflictError, ForbiddenError, NotFoundError } from '../utils/errors';
 import { assertMemberOnboardingAllowed } from './subscription.service';
+import { env } from '../config/env';
 
 export interface ListChamaApplicationsInput {
   chamaId: string;
@@ -41,7 +42,10 @@ interface ApplicationRow extends QueryResultRow {
 }
 
 export class ChamaApplicationService {
-  constructor(private readonly db: Pool = pool) {}
+  constructor(
+    private readonly db: Pool = pool,
+    private readonly bypassCommitmentFee = env.DEMO_BYPASS_COMMITMENT_FEE,
+  ) {}
 
   async list(input: ListChamaApplicationsInput) {
     const where = ['ca.chama_id = $1'];
@@ -209,7 +213,8 @@ export class ChamaApplicationService {
         targetMembers: chama.target_members === null ? null : Number(chama.target_members),
       });
 
-      const commitmentRequired = BigInt(rule.commitment_amount) > 0n;
+      const configuredCommitment = BigInt(rule.commitment_amount) > 0n;
+      const commitmentRequired = configuredCommitment && !this.bypassCommitmentFee;
       const membershipStatus = commitmentRequired ? 'pending' : 'active';
       const membership = (await client.query(
         `INSERT INTO chama_members
@@ -256,7 +261,7 @@ export class ChamaApplicationService {
       let commitment: { required: boolean; amount: string; state: string; id?: string } = {
         required: commitmentRequired,
         amount: rule.commitment_amount,
-        state: commitmentRequired ? 'applied' : 'not_required',
+        state: commitmentRequired ? 'applied' : configuredCommitment ? 'demo_bypassed' : 'not_required',
       };
 
       if (commitmentRequired) {
@@ -264,7 +269,7 @@ export class ChamaApplicationService {
           `INSERT INTO commitment_deposits
              (chama_id, user_id, membership_id, application_id, chama_rule_id, amount,
               state, last_transition_source, last_transition_reference)
-           VALUES ($1, $2, $3, $4, $5, $6, 'applied', 'application_review', $4::text)
+           VALUES ($1, $2, $3, $4::uuid, $5, $6, 'applied', 'application_review', ($4::uuid)::text)
            RETURNING id, state::text AS state`,
           [input.chamaId, application.user_id, membership.id, application.id, rule.id, rule.commitment_amount],
         )).rows[0];
@@ -276,6 +281,7 @@ export class ChamaApplicationService {
         application: reviewedApplication,
         membership,
         commitment,
+        demoCommitmentBypass: configuredCommitment && this.bypassCommitmentFee,
         constitution: { id: rule.id, version: rule.version, accepted: true },
       };
     }, {}, this.db);

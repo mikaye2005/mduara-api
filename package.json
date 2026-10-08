@@ -12,6 +12,7 @@
     "worker:dev": "tsx watch src/worker.ts",
     "typecheck": "tsc --noEmit",
     "db:migrate": "tsx src/db/migrate.ts --skip-super-admin",
+    "demo:bypass-commitments": "tsx src/db/bypass-demo-commitments.ts",
     "migrate": "tsx src/db/migrate.ts",
     "test": "node --import tsx --import ./src/tests/setup.ts --test src/tests/unit/**/*.test.ts",
     "test:integration": "node --import tsx --import ./src/tests/setup.ts --test src/tests/integration/**/*.test.ts",

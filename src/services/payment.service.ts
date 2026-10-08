@@ -266,6 +266,46 @@ export class PaymentService {
     }
   }
 
+  /**
+   * Development-only convenience boundary. It creates the current member
+   * obligation when scheduling has not run, then settles it through the same
+   * console callback and ledger path as a real contribution.
+   */
+  async simulateContribution(input: { userId:string; chamaId:string; amount?:bigint; periodLabel?:string }, now=new Date()) {
+    if (env.NODE_ENV === 'production' || env.MPESA_PROVIDER !== 'console') {
+      throw new ForbiddenError('Contribution simulation is available only with the development console provider', 'CONTRIBUTION_SIMULATION_FORBIDDEN');
+    }
+    const context = (await this.db.query<{
+      membership_id:string; phone:string; membership_status:string; contribution_amount:string;
+    }>(`SELECT cm.id AS membership_id,u.phone,cm.membership_status::text AS membership_status,c.contribution_amount::text
+          FROM chama_members cm JOIN users u ON u.id=cm.user_id JOIN chamas c ON c.id=cm.chama_id
+         WHERE cm.chama_id=$1 AND cm.user_id=$2`,[input.chamaId,input.userId])).rows[0];
+    if (!context) throw new NotFoundError('Active Chama membership not found', 'CHAMA_MEMBERSHIP_NOT_FOUND');
+    if (context.membership_status !== 'active') throw new ForbiddenError('Contribution simulation requires an active Chama membership', 'CHAMA_MEMBERSHIP_INACTIVE');
+
+    const periodLabel=input.periodLabel??new Intl.DateTimeFormat('en-CA',{timeZone:env.SCHEDULER_TIMEZONE,year:'numeric',month:'2-digit'}).format(now);
+    let contribution=(await this.db.query<{id:string;expected_amount:string;confirmed_amount:string;status:string}>(
+      `SELECT c.id,c.expected_amount::text,c.status::text AS status,
+              COALESCE(SUM(cp.amount) FILTER(WHERE cp.status='confirmed'),0)::text AS confirmed_amount
+         FROM contributions c LEFT JOIN contribution_payments cp ON cp.contribution_id=c.id
+        WHERE c.chama_id=$1 AND c.member_id=$2 AND c.period_label=$3
+        GROUP BY c.id ORDER BY c.created_at DESC,c.id DESC LIMIT 1`,
+      [input.chamaId,context.membership_id,periodLabel])).rows[0];
+    if (!contribution) {
+      contribution=(await this.db.query<{id:string;expected_amount:string;confirmed_amount:string;status:string}>(
+        `INSERT INTO contributions(chama_id,member_id,expected_amount,due_date,period_label)
+         VALUES($1,$2,$3,$4::date,$5)
+         RETURNING id,expected_amount::text,'0'::text AS confirmed_amount,status::text AS status`,
+        [input.chamaId,context.membership_id,context.contribution_amount,now.toISOString().slice(0,10),periodLabel])).rows[0];
+    }
+    const remaining=BigInt(contribution.expected_amount)-BigInt(contribution.confirmed_amount);
+    if(remaining<=0n)throw new ConflictError('The contribution for this period is already fully paid','CONTRIBUTION_ALREADY_PAID');
+    const amount=input.amount??remaining;
+    if(amount<=0n||amount>remaining)throw new UnprocessableEntityError('Simulation amount must be within the unpaid contribution balance',{remainingAmount:remaining.toString()},'PAYMENT_EXCEEDS_REMAINING');
+    const payment=await this.initiateStkPush({userId:input.userId,contributionId:contribution.id,amount,phoneNumber:context.phone});
+    return{simulated:true,periodLabel,contributionId:contribution.id,expectedAmount:contribution.expected_amount,paidAmount:amount.toString(),...payment};
+  }
+
   async getStatus(checkoutRequestId: string, userId: string) {
     const result = await this.db.query<ProviderLogRow>(
       `SELECT id, user_id, contribution_id, chama_id, member_id, merchant_request_id, checkout_request_id,

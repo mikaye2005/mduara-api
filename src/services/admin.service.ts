@@ -4,7 +4,7 @@ import { withDatabaseTransaction } from '../db/transaction';
 import { env } from '../config/env';
 import { ConflictError, ForbiddenError, NotFoundError } from '../utils/errors';
 import { writeAuditEvent } from './audit.service';
-import type { AdminRange } from '../validation/admin.validation';
+import type { AdminDashboardRange, AdminRange } from '../validation/admin.validation';
 import { hashSecret } from '../utils/crypto.util';
 
 type PageInput = { page: number; perPage: number };
@@ -74,6 +74,97 @@ export class AdminService {
         subscriptionCount: Number(p?.subscription_count ?? 0),
       },
     };
+  }
+
+  /** Read model consumed directly by the Super Admin dashboard graphs. */
+  async dashboard(range: AdminDashboardRange = '30d', now = new Date()) {
+    const { start, previousStart, bucket, step } = dashboardWindow(range, now);
+    const [metrics, userSeries, chamaSeries, chamaStatuses, paymentSeries] = await Promise.all([
+      this.db.query<{
+        total_users:number; previous_users:number; active_chamas:number; previous_active_chamas:number;
+        pending_applications:number; previous_pending_applications:number;
+        payment_confirmed:number; payment_failed:number; previous_payment_confirmed:number; previous_payment_failed:number;
+      }>(`SELECT
+          (SELECT COUNT(*)::int FROM users WHERE created_at <= $1) AS total_users,
+          (SELECT COUNT(*)::int FROM users WHERE created_at < $2) AS previous_users,
+          (SELECT COUNT(*)::int FROM chamas WHERE status='active' AND created_at <= $1) AS active_chamas,
+          (SELECT COUNT(*)::int FROM chamas WHERE status='active' AND created_at < $2) AS previous_active_chamas,
+          (SELECT COUNT(*)::int FROM chama_applications WHERE status IN ('pending','commitment_pending')) AS pending_applications,
+          (SELECT COUNT(*)::int FROM chama_applications WHERE status IN ('pending','commitment_pending') AND created_at < $2) AS previous_pending_applications,
+          (SELECT COUNT(*)::int FROM payment_provider_logs WHERE status='confirmed' AND created_at >= $2 AND created_at <= $1) AS payment_confirmed,
+          (SELECT COUNT(*)::int FROM payment_provider_logs WHERE status='failed' AND created_at >= $2 AND created_at <= $1) AS payment_failed,
+          (SELECT COUNT(*)::int FROM payment_provider_logs WHERE status='confirmed' AND created_at >= $3 AND created_at < $2) AS previous_payment_confirmed,
+          (SELECT COUNT(*)::int FROM payment_provider_logs WHERE status='failed' AND created_at >= $3 AND created_at < $2) AS previous_payment_failed`,[now,start,previousStart]),
+      this.db.query<{bucket:string;value:number}>(`SELECT point::date::text AS bucket,
+          (SELECT COUNT(*)::int FROM users u WHERE u.created_at < point + $3::interval) AS value
+        FROM generate_series(date_trunc($1,$2::timestamptz),$4::timestamptz,$3::interval) point ORDER BY point`,[bucket,start,step,now]),
+      this.db.query<{bucket:string;value:number}>(`SELECT point::date::text AS bucket,
+          (SELECT COUNT(*)::int FROM chamas c WHERE c.status='active' AND c.created_at < point + $3::interval) AS value
+        FROM generate_series(date_trunc($1,$2::timestamptz),$4::timestamptz,$3::interval) point ORDER BY point`,[bucket,start,step,now]),
+      this.db.query<{status:string;value:number}>(`SELECT status::text AS status,COUNT(*)::int AS value FROM chamas GROUP BY status ORDER BY status`),
+      this.db.query<{bucket:string;confirmed:number;pending:number;failed:number}>(`SELECT date_trunc($1,created_at)::date::text AS bucket,
+          COUNT(*) FILTER(WHERE status='confirmed')::int AS confirmed,
+          COUNT(*) FILTER(WHERE status='pending')::int AS pending,
+          COUNT(*) FILTER(WHERE status IN ('failed','reversed'))::int AS failed
+        FROM payment_provider_logs WHERE created_at >= $2 AND created_at <= $3 GROUP BY 1 ORDER BY 1`,[bucket,start,now]),
+    ]);
+    const m=metrics.rows[0];
+    const currentRate=successRate(m.payment_confirmed,m.payment_failed);
+    const previousRate=successRate(m.previous_payment_confirmed,m.previous_payment_failed);
+    return {
+      range, generatedAt:now.toISOString(), timezone:env.SCHEDULER_TIMEZONE,
+      metrics:{
+        totalUsers:metric(m.total_users,m.previous_users),
+        activeChamas:metric(m.active_chamas,m.previous_active_chamas),
+        pendingApplications:metric(m.pending_applications,m.previous_pending_applications),
+        paymentSuccessRate:{value:currentRate,unit:'percent' as const,change:round1(currentRate-previousRate),changeDirection:direction(currentRate-previousRate),comparisonLabel:'vs previous period'},
+      },
+      userGrowth:userSeries.rows.map(r=>({label:r.bucket,value:Number(r.value)})),
+      chamaGrowth:chamaSeries.rows.map(r=>({label:r.bucket,value:Number(r.value)})),
+      chamaStatuses:chamaStatuses.rows.map(r=>({label:titleCase(r.status),value:Number(r.value),tone:chamaTone(r.status)})),
+      paymentActivity:paymentSeries.rows.map(r=>({label:r.bucket,confirmed:Number(r.confirmed),pending:Number(r.pending),failed:Number(r.failed)})),
+    };
+  }
+
+  /** Consolidates actionable queues so the client never has to invent incidents. */
+  async commandCenter(now = new Date()) {
+    const [stalePayments, escalatedTickets, recentEvents, health, suspicious] = await Promise.all([
+      this.db.query<{id:string;status:string;created_at:string;amount:string;currency:string}>(`SELECT id,status::text AS status,created_at::text,amount::text,currency FROM payment_provider_logs WHERE (status='pending' AND created_at < $1::timestamptz-INTERVAL '15 minutes') OR (status='failed' AND created_at >= $1::timestamptz-INTERVAL '24 hours') ORDER BY created_at ASC LIMIT 50`,[now]),
+      this.db.query<{id:string;ticket_code:string;subject:string;category:string;status:string;created_at:string}>(`SELECT id,ticket_code,subject,category::text AS category,status::text AS status,created_at::text FROM support_tickets WHERE status IN ('escalated','open','in_progress') ORDER BY CASE WHEN status='escalated' THEN 0 ELSE 1 END,created_at ASC LIMIT 50`),
+      this.db.query<{id:string;title:string;detail:string;created_at:string;tone:'green'|'blue'|'purple'|'amber'|'red'|'neutral'}>(`
+        SELECT * FROM (
+          SELECT 'audit:'||al.id::text AS id,replace(initcap(al.action),'_',' ') AS title,
+                 concat_ws(' · ',u.full_name,al.entity_type,al.entity_id::text) AS detail,
+                 al.created_at::text,'purple'::text AS tone
+            FROM audit_logs al LEFT JOIN users u ON u.id=al.actor_id WHERE al.action <> 'platform_admin_access'
+          UNION ALL
+          SELECT 'payment:'||p.id::text,'Payment callback reconciled',
+                 concat_ws(' · ',p.receipt_number,p.currency||' '||p.amount::text),COALESCE(p.completed_at,p.updated_at)::text,'green'
+            FROM payment_provider_logs p WHERE p.status='confirmed'
+          UNION ALL
+          SELECT 'application:'||a.id::text,'New Chama application submitted',
+                 concat_ws(' · ',c.name,u.full_name),a.created_at::text,'blue'
+            FROM chama_applications a JOIN chamas c ON c.id=a.chama_id JOIN users u ON u.id=a.user_id
+          UNION ALL
+          SELECT 'support:'||s.id::text,'Support ticket escalated',
+                 concat_ws(' · ',s.ticket_code,s.subject),s.updated_at::text,'amber'
+            FROM support_tickets s WHERE s.status='escalated'
+        ) events ORDER BY created_at DESC,id DESC LIMIT 30`),
+      this.systemHealth(now),
+      this.suspiciousActivity(now),
+    ]);
+    const incidents=[
+      ...stalePayments.rows.map(p=>({id:`payment:${p.id}`,title:p.status==='pending'?'Payment callback delayed':'Payment failed',category:'Payments',summary:`${p.currency} ${p.amount} provider transaction is ${p.status}.`,severity:(p.status==='pending'?'high':'normal') as 'high'|'normal',occurredAt:new Date(p.created_at).toISOString(),route:'financial-operations'})),
+      ...escalatedTickets.rows.map(t=>({id:`ticket:${t.id}`,title:t.subject,category:'Support',summary:`${t.ticket_code} · ${titleCase(t.category)}`,severity:(t.status==='escalated'?'high':'normal') as 'high'|'normal',occurredAt:new Date(t.created_at).toISOString(),route:'support-disputes'})),
+      ...suspicious.signals.map(s=>({id:`risk:${s.rule}:${s.subjectId}`,title:titleCase(s.rule),category:'Risk & compliance',summary:`${s.subjectName}: ${s.reason}`,severity:'high' as const,occurredAt:now.toISOString(),route:'risk-compliance'})),
+    ].sort((a,b)=>a.occurredAt.localeCompare(b.occurredAt)).slice(0,100);
+    const services=[
+      {name:'API',state:'operational' as const,checkedAt:now.toISOString()},
+      {name:'Background jobs',state:health.backgroundJobs.failedLast24h||health.backgroundJobs.staleRunning?'degraded' as const:'operational' as const,checkedAt:now.toISOString()},
+      {name:'Payments',state:health.paymentWebhooks.stalePending||health.paymentWebhooks.failedLast24h?'monitoring' as const:'operational' as const,checkedAt:now.toISOString()},
+      {name:'Notifications',state:health.notifications.failedLast24h?'degraded' as const:'operational' as const,checkedAt:now.toISOString()},
+    ];
+    return {lastUpdated:now.toISOString(),incidents,events:recentEvents.rows.map(e=>({id:e.id,title:e.title,detail:e.detail||'Platform event',occurredAt:new Date(e.created_at).toISOString(),tone:e.tone})),services};
   }
 
   async revenue(range: AdminRange = '6m', now = new Date()) {
@@ -653,14 +744,40 @@ export class AdminService {
       const recipients=await client.query<{id:string}>(audienceSql,input.audience==='chama'?[input.chamaId]:[]);
       let queued=0;
       for(const channel of input.channels){
-        const result=await client.query(`INSERT INTO notifications(user_id,chama_id,event_type,channel,title,body,status,payload)
-          SELECT r.id,$1,'platform_broadcast',$2::notification_channel,$3,$4,'pending',$5::jsonb FROM unnest($6::uuid[]) AS r(id)`,
+        const result=await client.query(`INSERT INTO notifications(user_id,chama_id,event_type,channel,title,body,status,payload,sent_at)
+          SELECT r.id,$1,'platform_broadcast',$2::notification_channel,$3,$4,
+                 CASE WHEN $2::notification_channel='in_app' THEN 'sent'::notification_status ELSE 'pending'::notification_status END,
+                 $5::jsonb,CASE WHEN $2::notification_channel='in_app' THEN CURRENT_TIMESTAMP ELSE NULL END
+            FROM unnest($6::uuid[]) AS r(id)`,
           [input.chamaId??null,channel,input.title,input.body,JSON.stringify({audience:input.audience,createdBy:actorId}),recipients.rows.map(r=>r.id)]);
         queued+=result.rowCount??0;
       }
       await writeAuditEvent(client,{category:'system',action:'platform_admin_broadcast_queued',actorId,actorRole:'platform_admin',chamaId:input.chamaId,
         entityType:'broadcast',ipAddress:context?.ip,userAgent:context?.userAgent,payload:{audience:input.audience,channels:input.channels,title:input.title,reason:input.reason,recipientCount:recipients.rowCount,notificationCount:queued}});
       return{audience:input.audience,chamaId:input.chamaId??null,recipientCount:recipients.rowCount,notificationCount:queued,channels:input.channels,status:'queued'};
+    },{isolationLevel:'READ COMMITTED'},this.db);
+  }
+
+  async contactChamaLeadership(actorId:string,chamaId:string,input:{subject:string;body:string;reason:string;channels:string[]},context?:{ip?:string|null;userAgent?:string|null}){
+    return withDatabaseTransaction(async(client)=>{
+      const chama=(await client.query<{name:string}>(`SELECT name FROM chamas WHERE id=$1`,[chamaId])).rows[0];
+      if(!chama)throw new NotFoundError('Chama not found','CHAMA_NOT_FOUND');
+      const recipients=await client.query<{id:string}>(`SELECT DISTINCT u.id FROM users u JOIN chama_members cm ON cm.user_id=u.id WHERE cm.chama_id=$1 AND cm.membership_status='active' AND cm.role IN ('chairperson','secretary','treasurer') AND u.status='active'`,[chamaId]);
+      if(!recipients.rowCount)throw new ConflictError('This Chama has no active leadership recipient','CHAMA_LEADERSHIP_UNAVAILABLE');
+      const message=(await client.query<{id:string;created_at:string}>(`INSERT INTO chama_messages(chama_id,author_id,kind,body)
+        VALUES($1,$2,'system',$3) RETURNING id,created_at::text`,[chamaId,actorId,`${input.subject}\n\n${input.body}`])).rows[0];
+      let queued=0;
+      for(const channel of input.channels){
+        const result=await client.query(`INSERT INTO notifications(user_id,chama_id,event_type,channel,title,body,status,payload,sent_at)
+          SELECT r.id,$1,'platform_admin_leadership_message',$2::notification_channel,$3,$4,
+                 CASE WHEN $2::notification_channel='in_app' THEN 'sent'::notification_status ELSE 'pending'::notification_status END,
+                 $5::jsonb,CASE WHEN $2::notification_channel='in_app' THEN CURRENT_TIMESTAMP ELSE NULL END
+            FROM unnest($6::uuid[]) AS r(id)`,
+          [chamaId,channel,input.subject,input.body,JSON.stringify({audience:'chama_leadership',createdBy:actorId,messageId:message.id}),recipients.rows.map(r=>r.id)]);
+        queued+=result.rowCount??0;
+      }
+      await writeAuditEvent(client,{category:'system',action:'platform_admin_contacted_chama_leadership',actorId,actorRole:'platform_admin',chamaId,entityType:'leadership_message',entityId:message.id,ipAddress:context?.ip,userAgent:context?.userAgent,payload:{channels:input.channels,subject:input.subject,reason:input.reason,recipientCount:recipients.rowCount,notificationCount:queued}});
+      return{chamaId,chamaName:chama.name,messageId:message.id,createdAt:message.created_at,recipientCount:recipients.rowCount,notificationCount:queued,channels:input.channels,status:'sent'};
     },{isolationLevel:'READ COMMITTED'},this.db);
   }
 
@@ -757,6 +874,24 @@ export class AdminService {
 function pageMeta(total:number,input:PageInput){return{total,page:input.page,perPage:input.perPage,totalPages:total?Math.ceil(total/input.perPage):0};}
 function iso(value:string|null|undefined){return value?new Date(value).toISOString():null;}
 function signal(rule:string,subjectType:string,subjectId:string,subjectName:string,count:number,reason:string){return{rule,subjectType,subjectId,subjectName,count,reason};}
+function metric(value:number,previous:number){const change=Number(value)-Number(previous);return{value:Number(value),unit:'count' as const,change,changeDirection:direction(change),comparisonLabel:'vs previous period'};}
+function direction(value:number):'up'|'down'|'flat'{return value>0?'up':value<0?'down':'flat';}
+function round1(value:number){return Math.round(value*10)/10;}
+function successRate(confirmed:number,failed:number){const total=Number(confirmed)+Number(failed);return total?round1(Number(confirmed)/total*100):0;}
+function titleCase(value:string){return value.replace(/_/g,' ').replace(/\b\w/g,c=>c.toUpperCase());}
+function chamaTone(status:string):'green'|'blue'|'purple'|'amber'|'red'|'neutral'{
+  if(status==='active')return'green'; if(status==='recruiting')return'blue'; if(status==='completed')return'purple';
+  if(status==='draft'||status==='inactive')return'amber'; if(status==='dissolved')return'red'; return'neutral';
+}
+function dashboardWindow(range:AdminDashboardRange,now:Date):{start:Date;previousStart:Date;bucket:'day'|'week'|'month';step:string}{
+  const start=new Date(now); let bucket:'day'|'week'|'month'='day'; let step='1 day';
+  if(range==='7d')start.setUTCDate(start.getUTCDate()-7);
+  else if(range==='30d')start.setUTCDate(start.getUTCDate()-30);
+  else if(range==='90d'){start.setUTCDate(start.getUTCDate()-90);bucket='week';step='1 week';}
+  else{start.setUTCMonth(start.getUTCMonth()-12);bucket='month';step='1 month';}
+  const previousStart=new Date(start.getTime()-(now.getTime()-start.getTime()));
+  return{start,previousStart,bucket,step};
+}
 function rangeWindow(range:AdminRange,now:Date):{start:Date|null;bucket:'day'|'week'|'month'}{
   const copy=new Date(now); if(range==='all')return{start:null,bucket:'month'};
   if(range==='1m'){copy.setUTCMonth(copy.getUTCMonth()-1);return{start:copy,bucket:'day'};}

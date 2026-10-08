@@ -98,13 +98,16 @@ export const createChamaWizardSchema = z.object({
     version: z.literal(1),
   }).strict(),
   contributionAmount: z.coerce.number().int().positive(),
-  contributionFrequency: z.enum(['weekly', 'biweekly', 'monthly']),
+  contributionFrequency: z.enum(['weekly', 'biweekly', 'monthly', 'custom']),
+  contributionInterval: z.coerce.number().int().positive().max(365).optional(),
+  contributionIntervalUnit: z.enum(['day', 'week', 'month']).optional(),
   contributionStartDate: isoDateSchema,
   creationSource: z.enum(['self_service', 'platform_admin']),
   description: z.string().trim().max(2000).optional(),
   durationMonths: z.coerce.number().int().positive().max(120),
   founderIdentifier: z.string().trim().min(1).optional(),
   goalCode: z.string().trim().min(1).max(100).optional(),
+  joiningWindowStartsAt: isoDateSchema.optional(),
   joiningWindowEndsAt: isoDateSchema,
   location: z.string().trim().max(255).optional(),
   logoUrl: z.string().trim().url().optional(),
@@ -121,6 +124,23 @@ export const createChamaWizardSchema = z.object({
   }
   if (value.contributionAmount > value.targetAmount) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['contributionAmount'], message: 'Contribution amount cannot exceed target amount' });
+  }
+  if (value.contributionFrequency === 'custom') {
+    if (!value.contributionInterval) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['contributionInterval'], message: 'Enter a custom contribution interval' });
+    }
+    if (!value.contributionIntervalUnit) {
+      ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['contributionIntervalUnit'], message: 'Choose a custom contribution interval unit' });
+    }
+  } else if (value.contributionInterval !== undefined || value.contributionIntervalUnit !== undefined) {
+    ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['contributionFrequency'], message: 'Custom interval fields require custom contribution frequency' });
+  }
+  if (value.joiningWindowStartsAt && value.joiningWindowEndsAt < value.joiningWindowStartsAt) {
+    ctx.addIssue({
+      code: z.ZodIssueCode.custom,
+      path: ['joiningWindowEndsAt'],
+      message: 'Joining window end date cannot precede its start date',
+    });
   }
   if (value.creationSource === 'platform_admin' && !value.founderIdentifier) {
     ctx.addIssue({ code: z.ZodIssueCode.custom, path: ['founderIdentifier'], message: 'Founder identifier is required for platform provisioning' });

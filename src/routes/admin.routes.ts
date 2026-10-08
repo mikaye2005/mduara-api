@@ -11,6 +11,8 @@ router.use(requireRoles(['SUPER_ADMIN']));
 router.use(auditAdminAccess);
 
 router.get('/overview', adminController.overview);
+router.get('/dashboard', adminController.dashboard);
+router.get('/command-center', adminController.commandCenter);
 router.get('/revenue', adminController.revenue);
 router.get('/search', adminController.search);
 router.get('/users', adminController.listUsers);
@@ -28,6 +30,7 @@ router.get('/chamas/:chamaId', adminController.getChama);
 router.patch('/chamas/:chamaId/status', adminController.moderateChama);
 router.post('/chamas/:chamaId/members', adminController.addMembership);
 router.patch('/chamas/:chamaId/members/:userId/role', adminController.changeRole);
+router.post('/chamas/:chamaId/leadership-messages', adminController.contactChamaLeadership);
 router.get('/payments', adminController.listPayments);
 router.get('/payments/:paymentId', adminController.getPayment);
 router.get('/refunds', adminController.listRefunds);
